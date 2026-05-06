@@ -112,7 +112,7 @@ def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
-              ("Main Construction Site","12 MG Road, Bangalore",12.9716,77.5946,300))
+              ("Main Construction Site","Vijayanagar, Bangalore",12.96386,77.53386,300))
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
               ("Warehouse Zone A","56 Industrial Area, Mysore",12.2958,76.6394,250))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (?,?,?,?,?,?)",
