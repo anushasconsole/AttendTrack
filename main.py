@@ -193,8 +193,8 @@ async def gemini_compare_faces(stored_b64: str, live_b64: str) -> dict:
         return {"match": match, "confidence": confidence, "reason": reason, "bypass": False}
     except Exception as e:
         print(f"Gemini face compare error: {e}")
-        # On AI error: be conservative — deny access
-        return {"match": False, "confidence": 0.0, "reason": f"AI error: {str(e)}", "bypass": False}
+        # On AI error: fall back to bypass so workers are not locked out
+        return {"match": True, "confidence": 0.5, "reason": f"AI unavailable — bypass mode", "bypass": True}
 
 # ─────────────────────────────────────────────
 # MODELS
@@ -302,8 +302,8 @@ async def face_register(req: FaceRegisterReq):
     if not req.face_image or len(req.face_image) < 100:
         conn.close(); raise HTTPException(400, "Invalid face image")
 
-    # Store up to 30KB of base64 — enough for Gemini comparison
-    face_store = req.face_image[:40000]
+    # Store full base64 image for reliable Gemini comparison
+    face_store = req.face_image
     conn.execute(
         "UPDATE users SET face_image_b64=?, face_registered=1 WHERE employee_id=?",
         (face_store, req.employee_id.upper())
@@ -340,7 +340,7 @@ async def face_verify(req: FaceVerifyReq):
     result = await gemini_compare_faces(user["face_image_b64"], req.live_image)
 
     # Confidence threshold: 0.70 — adjust if needed
-    THRESHOLD = 0.70
+    THRESHOLD = 0.60
     if result["bypass"]:
         # Gemini unavailable — allow access with warning
         return {
