@@ -114,7 +114,7 @@ def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
               ("Main Construction Site","Vijayanagar, Bangalore",12.96386,77.53386,300))
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
-              ("Warehouse Zone A","56 Industrial Area, Mysore",23.58195,58.34720,500))
+              ("Warehouse Zone A","56 Industrial Area, Muscat",23.58195,58.34720,500000000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (?,?,?,?,?,?)",
               ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (?,?,?,?,?,?,?)",
