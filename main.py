@@ -112,9 +112,9 @@ def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
-              ("Main Construction Site","Vijayanagar, Bangalore",12.96386,77.53386,300))
+              ("Main Construction Site","Vijayanagar, Bangalore",23.58195,58.34720,1000))
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (?,?,?,?,?)",
-              ("Warehouse Zone A","56 Industrial Area, Muscat",23.58195,58.34720,500000000))
+              ("Warehouse Zone A","56 Industrial Area, Muscat",23.58195,58.34720,1000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (?,?,?,?,?,?)",
               ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (?,?,?,?,?,?,?)",
@@ -122,8 +122,8 @@ def _seed(c):
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (?,?,?,?,?,?,?)",
               ("MGR002","Suresh Nair","manager",_hash("mgr456"),"9876543212","Operations",2))
     for i,(eid,name,site) in enumerate([
-        ("LAB001","Ramu Verma",1),("LAB002","Shyam Das",1),
-        ("LAB003","Kiran Patil",2),("LAB004","Mohan Reddy",1),
+        ("LAB001","Prashanth Kumar",1),("LAB002","Pranav Das",1),
+        ("LAB003","Shreekanth Rao",2),("LAB004","Mohan kumar",2),
     ]):
         c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (?,?,?,?,?,?,?)",
                   (eid,name,"labour",_hash("lab123"),f"98765432{13+i}","Labour",site))
