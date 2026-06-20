@@ -212,7 +212,7 @@ input:focus{border-color:var(--purple-light)}
 <script>
 // ─── CONFIG ───
 // ⚠️ REPLACE WITH YOUR RENDER BACKEND URL after deploying
-const API_URL = "https://attendtrack-production-39c3.up.railway.app";
+const API = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
 
 // ─── STATE ───
 let currentUser = null;
