@@ -213,8 +213,11 @@ def extract_embedding(b64_image: str):
     if not FACE_READY: return None
     try:
         img_bytes = base64.b64decode(clean_b64(b64_image))
-        pil_img   = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        img_array = np.array(pil_img)
+        pil_img   = Image.open(io.BytesIO(img_bytes))
+        pil_img.load()  # force full decode now, surfaces truncation errors here
+        pil_img   = pil_img.convert("RGB")
+        img_array = np.ascontiguousarray(np.array(pil_img, dtype=np.uint8))
+        print(f"[FACE DEBUG] shape={img_array.shape} dtype={img_array.dtype} contiguous={img_array.flags['C_CONTIGUOUS']}")
         encodings = face_recognition.face_encodings(img_array, model="large")
         return encodings[0].tolist() if encodings else None
     except Exception as e:
@@ -359,6 +362,7 @@ async def face_verify(req: FaceVerifyReq):
     emb = user["face_embedding"]
     if isinstance(emb, str): emb = json.loads(emb)
     result = compare_faces(emb, req.live_image)
+    print(f"[FACE VERIFY] {req.employee_id} -> {result}")  # TEMP: remove once diagnosed
 
     if result["bypass"]:
         return {"success": True, "match": True, "confidence": 0.5,
