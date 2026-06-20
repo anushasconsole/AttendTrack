@@ -227,12 +227,39 @@ def extract_embedding(b64_image: str):
         img_array = img_array.copy()
 
         print(f"[FACE DEBUG] shape={img_array.shape} dtype={img_array.dtype} "
-              f"contiguous={img_array.flags['C_CONTIGUOUS']} owns_data={img_array.flags['OWNDATA']}")
+              f"contiguous={img_array.flags['C_CONTIGUOUS']} owns_data={img_array.flags['OWNDATA']}",
+              flush=True)
 
-        encodings = face_recognition.face_encodings(img_array, model="large")
+        # DEBUG: isolate face detection from face encoding so we can see
+        # exactly which dlib call is throwing, and the real exception text.
+        try:
+            locations = face_recognition.face_locations(img_array, model="hog")
+            print(f"[FACE DEBUG] face_locations OK -> {locations}", flush=True)
+        except Exception as e:
+            import traceback
+            print(f"[FACE DEBUG] face_locations FAILED: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            return None
+
+        if not locations:
+            print("[FACE DEBUG] No face found by face_locations", flush=True)
+            return None
+
+        try:
+            encodings = face_recognition.face_encodings(img_array, known_face_locations=locations, model="small")
+            print(f"[FACE DEBUG] face_encodings OK -> got {len(encodings)} encoding(s)", flush=True)
+        except Exception as e:
+            import traceback
+            print(f"[FACE DEBUG] face_encodings FAILED: {type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            return None
+
         return encodings[0].tolist() if encodings else None
     except Exception as e:
-        print(f"Embedding error: {e}"); return None
+        import traceback
+        print(f"Embedding error: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return None
 
 def compare_faces(stored_embedding: list, live_b64: str) -> dict:
     if not FACE_READY:
