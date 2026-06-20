@@ -6,13 +6,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas-dev \
     liblapack-dev \
     libx11-dev \
-    libgtk-3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install dlib first (takes time to compile), then rest
+RUN pip install --no-cache-dir dlib==19.24.1
+RUN pip install --no-cache-dir face_recognition==1.3.0
+RUN pip install --no-cache-dir \
+    fastapi==0.111.0 \
+    "uvicorn[standard]==0.29.0" \
+    python-dotenv==1.0.1 \
+    "pydantic==2.7.1" \
+    "pydantic-core==2.18.2" \
+    anyio==4.3.0 \
+    httpx==0.27.0 \
+    starlette==0.37.2 \
+    psycopg2-binary==2.9.9 \
+    "Pillow>=10.4.0" \
+    "numpy>=1.26.0"
 
 COPY . .
 
