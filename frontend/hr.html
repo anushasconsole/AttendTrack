@@ -148,7 +148,7 @@ select option{background:#1a0a3d}
 
 <script>
   
-const API_URL = "https://attendtrack-production-39c3.up.railway.app";
+const API = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
 let currentUser = null;
 let currentTab = 'pending';
 let refreshTimer = null;
