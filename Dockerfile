@@ -1,7 +1,5 @@
 FROM python:3.11-slim
 
-# System packages needed to COMPILE dlib (face_recognition's dependency).
-# Without these, `pip install dlib` fails on a clean container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     build-essential \
