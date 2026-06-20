@@ -306,6 +306,7 @@ class HRVerifyReq(BaseModel):
     note:          Optional[str] = None
 
 # ─────────────────────────────────────────────
+<<<<<<< HEAD
 # FRONTEND — three separate portals, each its own URL
 # ─────────────────────────────────────────────
 @app.get("/")
@@ -326,6 +327,14 @@ async def manager_portal():
 async def hr_portal():
     path = os.path.join(FRONTEND, "hr.html")
     return FileResponse(path) if os.path.exists(path) else {"msg": "hr.html not found"}
+=======
+# FRONTEND
+# ─────────────────────────────────────────────
+@app.get("/")
+async def root():
+    idx = os.path.join(FRONTEND, "index.html")
+    return FileResponse(idx) if os.path.exists(idx) else {"msg": "AttendTrack API v3"}
+>>>>>>> 837de748015be8eb9625767818356c4dc651647b
 
 @app.get("/health")
 async def health():
@@ -335,7 +344,10 @@ async def health():
         "db":           "postgresql"
     }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 837de748015be8eb9625767818356c4dc651647b
 # ─────────────────────────────────────────────
 # AUTH — STEP 1: PASSWORD LOGIN
 # ─────────────────────────────────────────────

@@ -7,6 +7,9 @@ anyio==4.3.0
 httpx==0.27.0
 starlette==0.37.2
 psycopg2-binary==2.9.9
+<<<<<<< HEAD
 face_recognition==1.3.0
 numpy>=1.26
 Pillow==10.3.0
+=======
+>>>>>>> 837de748015be8eb9625767818356c4dc651647b

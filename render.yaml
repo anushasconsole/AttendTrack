@@ -1,6 +1,7 @@
 services:
   - type: web
     name: attendtrack-api
+<<<<<<< HEAD
     env: docker
     dockerfilePath: ./Dockerfile
     envVars:
@@ -14,3 +15,15 @@ services:
 databases:
   - name: attendtrack-db
     plan: free   # upgrade to 'starter' or higher before going to production with 2000 employees
+=======
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false   # you'll set this in the Render dashboard
+    disk:
+      name: attendtrack-db
+      mountPath: /data
+      sizeGB: 1
+>>>>>>> 837de748015be8eb9625767818356c4dc651647b
