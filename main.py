@@ -216,8 +216,19 @@ def extract_embedding(b64_image: str):
         pil_img   = Image.open(io.BytesIO(img_bytes))
         pil_img.load()  # force full decode now, surfaces truncation errors here
         pil_img   = pil_img.convert("RGB")
-        img_array = np.ascontiguousarray(np.array(pil_img, dtype=np.uint8))
-        print(f"[FACE DEBUG] shape={img_array.shape} dtype={img_array.dtype} contiguous={img_array.flags['C_CONTIGUOUS']}")
+
+        # Build a clean, owned, contiguous uint8 buffer.
+        # np.array() + ascontiguousarray() can still leave a *view* into a
+        # larger decoder-owned buffer in some PIL/numpy combos, which dlib's
+        # pybind layer rejects with "Unsupported image type". .copy() forces
+        # a genuinely new, independently-owned allocation.
+        img_array = np.array(pil_img, dtype=np.uint8)
+        img_array = np.ascontiguousarray(img_array)
+        img_array = img_array.copy()
+
+        print(f"[FACE DEBUG] shape={img_array.shape} dtype={img_array.dtype} "
+              f"contiguous={img_array.flags['C_CONTIGUOUS']} owns_data={img_array.flags['OWNDATA']}")
+
         encodings = face_recognition.face_encodings(img_array, model="large")
         return encodings[0].tolist() if encodings else None
     except Exception as e:

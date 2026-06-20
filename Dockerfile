@@ -12,7 +12,10 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install dlib first (takes time to compile), then rest
+# Install numpy FIRST (pinned) so dlib's bindings link against a known-good ABI
+RUN pip install --no-cache-dir "numpy==1.26.4"
+
+# Install dlib next (takes time to compile), then face_recognition, then the rest
 RUN pip install --no-cache-dir dlib==19.24.1
 RUN pip install --no-cache-dir face_recognition==1.3.0
 RUN pip install --no-cache-dir \
@@ -25,8 +28,7 @@ RUN pip install --no-cache-dir \
     httpx==0.27.0 \
     starlette==0.37.2 \
     psycopg2-binary==2.9.9 \
-    "Pillow>=10.4.0" \
-    "numpy>=1.26.0"
+    "Pillow>=10.4.0"
 
 COPY . .
 
