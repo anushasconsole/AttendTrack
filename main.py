@@ -165,9 +165,9 @@ def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
-              ("Main Construction Site","Vijayanagar, Bangalore",23.58195,58.34720,1000))
+              ("Main Construction Site","Vijayanagar, Bangalore",12.618852,75.249893,1000))
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
-              ("Warehouse Zone A","56 Industrial Area, Muscat",23.58195,58.34720,1000))
+              ("Warehouse Zone A","56 Industrial Area, Muscat",12.618852,75.249893,1000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (%s,%s,%s,%s,%s,%s)",
               ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
