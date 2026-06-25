@@ -346,11 +346,13 @@ def check_and_alert_overtime(c, employee_id: str, phone: str, name: str, as_of: 
     elif total_hours >= warn_threshold:
         level = "warning"
     if not level:
+        print(f"[OVERTIME CHECK] {employee_id} total={total_hours:.3f}h this period — below warn threshold ({warn_threshold:.3f}h), no alert", flush=True)
         return {"alert_fired": False, "total_hours": total_hours}
 
     c.execute("""SELECT 1 FROM overtime_alerts WHERE employee_id=%s AND period_start=%s AND alert_level=%s""",
               (employee_id, period_start, level))
     if c.fetchone():
+        print(f"[OVERTIME ALERT SKIPPED] {employee_id} already alerted at level={level} for period starting {period_start} (total={total_hours:.2f}h)", flush=True)
         return {"alert_fired": False, "total_hours": total_hours, "reason": "already_sent_this_period"}
 
     if level == "exceeded":
