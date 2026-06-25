@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,10 +10,10 @@
   --bg:#06040f;--bg2:#0d0820;
   --purple:#6c2bd9;--purple-mid:#9b59f5;--purple-light:#c084fc;
   --violet:#7c3aed;--pink:#e879f9;--green:#4ade80;--red:#ef4444;
-  --amber:#f59e0b;--blue:#3b82f6;
+  --amber:#f59e0b;--blue:#3b82f6;--cyan:#22d3ee;
   --white:#f8f4ff;--white-dim:rgba(248,244,255,0.65);
   --white-faint:rgba(248,244,255,0.10);--glow:rgba(124,58,237,0.4);
-  --border:rgba(156,84,245,0.22);
+  --border:rgba(156,84,245,0.22);--cyan-glow:rgba(34,211,238,0.35);
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 body{background:var(--bg);color:var(--white);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}
@@ -88,6 +87,62 @@ input:focus{border-color:var(--purple-light)}
 .demo-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:1rem;justify-content:center}
 .chip{font-size:.67rem;padding:.2rem .6rem;border:1px solid var(--border);border-radius:100px;color:var(--white-dim);cursor:pointer;background:var(--white-faint)}
 .chip:hover{border-color:var(--purple-light);color:var(--purple-light)}
+
+/* ── Dynamic motion ── */
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.screen.active .card,.screen.active{animation:none}
+.status-card,.user-banner,.hist-row{animation:riseIn .45s cubic-bezier(.16,1,.3,1) backwards}
+.hist-row{animation-duration:.35s}
+.btn-primary,.btn-green,.btn-red{transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .25s}
+.btn-primary:active,.btn-green:active,.btn-red:active{transform:scale(.97)}
+.status-card{transition:background .4s,border-color .4s}
+.timer{animation:tick 1s ease-in-out infinite}
+@keyframes tick{0%,100%{opacity:1}50%{opacity:.85}}
+
+/* ── AI floating trigger + bottom sheet (shared design across all 3 portals) ── */
+.ai-fab{position:fixed;bottom:1.4rem;right:1.4rem;z-index:200;display:flex;align-items:center;gap:.5rem;
+  background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;
+  padding:.7rem 1.1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;
+  box-shadow:0 4px 24px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4);transition:transform .25s,box-shadow .25s}
+.ai-fab:hover{transform:translateY(-3px);box-shadow:0 8px 30px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4)}
+.ai-fab:active{transform:translateY(-1px) scale(.97)}
+.ai-fab .spark{font-size:1rem;animation:sparkle 2.2s ease-in-out infinite}
+@keyframes sparkle{0%,100%{transform:scale(1) rotate(0deg)}50%{transform:scale(1.15) rotate(12deg)}}
+.ai-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:300;
+  opacity:0;pointer-events:none;transition:opacity .3s}
+.ai-backdrop.open{opacity:1;pointer-events:auto}
+.ai-sheet{position:fixed;left:0;right:0;bottom:0;z-index:301;max-width:600px;margin:0 auto;
+  background:linear-gradient(170deg,var(--bg2),#0a0518);border:1px solid var(--border);
+  border-bottom:none;border-radius:24px 24px 0 0;box-shadow:0 -10px 50px rgba(0,0,0,.6);
+  transform:translateY(105%);transition:transform .4s cubic-bezier(.16,1,.3,1);
+  max-height:78vh;display:flex;flex-direction:column}
+.ai-sheet.open{transform:translateY(0)}
+.ai-handle{width:38px;height:4px;background:var(--white-faint);border-radius:3px;margin:.7rem auto .3rem}
+.ai-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:.4rem 1.3rem .8rem;border-bottom:1px solid var(--border)}
+.ai-sheet-title{display:flex;align-items:center;gap:.5rem;font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}
+.ai-sheet-title .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan-glow)}
+.ai-sheet-close{background:var(--white-faint);border:1px solid var(--border);color:var(--white-dim);
+  width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:1rem;line-height:1;display:flex;align-items:center;justify-content:center}
+.ai-sheet-close:hover{border-color:var(--red);color:var(--red)}
+.ai-sheet-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;flex:1}
+.ai-sheet-sub{font-size:.78rem;color:var(--white-dim);margin-bottom:1rem}
+.ai-gen-btn{width:100%;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;
+  border-radius:100px;padding:.75rem;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;
+  cursor:pointer;box-shadow:0 0 24px var(--cyan-glow);transition:transform .2s}
+.ai-gen-btn:active{transform:scale(.98)}
+.ai-gen-btn:disabled{opacity:.5;cursor:not-allowed}
+.ai-result{background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:14px;padding:1rem;
+  margin-top:1rem;font-size:.85rem;line-height:1.65;white-space:pre-wrap;animation:riseIn .35s cubic-bezier(.16,1,.3,1)}
+.ai-result.loading{color:var(--white-dim);font-style:italic;display:flex;align-items:center;gap:.5rem}
+.ai-result.error{color:var(--red);border-color:rgba(239,68,68,.3)}
+.ai-spinner{width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--cyan);
+  border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ai-meta{font-size:.68rem;color:var(--cyan);margin-top:.6rem;letter-spacing:.03em;opacity:.85}
+@media(prefers-reduced-motion:reduce){
+  .status-card,.user-banner,.hist-row,.timer,.ai-fab .spark{animation:none!important}
+  .ai-sheet,.ai-backdrop,.btn-primary,.btn-green,.btn-red{transition:none!important}
+}
 </style>
 </head>
 <body>
@@ -177,7 +232,7 @@ input:focus{border-color:var(--purple-light)}
 
   <!-- ── SCREEN: DASHBOARD ── -->
   <div class="screen" id="s-dashboard">
-    <div class="user-banner">
+    <div class="user-banner" style="animation-delay:.05s">
       <div class="avatar" id="dashAvatar">?</div>
       <div>
         <div class="user-name" id="dashName">–</div>
@@ -187,7 +242,7 @@ input:focus{border-color:var(--purple-light)}
     </div>
 
     <!-- Status card -->
-    <div id="statusCard" class="status-card not-checked">
+    <div id="statusCard" class="status-card not-checked" style="animation-delay:.1s">
       <div class="status-icon">🏗️</div>
       <div class="status-label" id="statusLabel">Not Checked In</div>
       <div class="status-sub" id="statusSub">Today's attendance not started</div>
@@ -206,6 +261,24 @@ input:focus{border-color:var(--purple-light)}
     <!-- History -->
     <div class="hist-title">📋 Recent Attendance</div>
     <div id="histList"><div style="color:var(--white-dim);font-size:.8rem;text-align:center;padding:.5rem">Loading…</div></div>
+  </div>
+</div>
+
+<!-- ── AI Insights — floating trigger + bottom sheet (shared across all portals) ── -->
+<button class="ai-fab" id="aiFab" onclick="openAiSheet()" style="display:none">
+  <span class="spark">✨</span> AI Insights
+</button>
+<div class="ai-backdrop" id="aiBackdrop" onclick="closeAiSheet()"></div>
+<div class="ai-sheet" id="aiSheet">
+  <div class="ai-handle"></div>
+  <div class="ai-sheet-head">
+    <div class="ai-sheet-title"><span class="dot"></span> AI Insights</div>
+    <button class="ai-sheet-close" onclick="closeAiSheet()">✕</button>
+  </div>
+  <div class="ai-sheet-body">
+    <div class="ai-sheet-sub">A real AI model reads your actual attendance history and gives you a quick, personal read on how your month is going.</div>
+    <button class="ai-gen-btn" id="aiGenBtn" onclick="generateAiInsight()">✨ Get my insight</button>
+    <div id="aiResult"></div>
   </div>
 </div>
 
@@ -400,6 +473,7 @@ function enterDashboard() {
   document.getElementById('dashName').textContent = currentUser.name;
   document.getElementById('dashMeta').textContent = `${currentUser.employee_id} · ${currentUser.site_name || 'Site unassigned'}`;
   document.getElementById('dashAvatar').textContent = currentUser.name[0].toUpperCase();
+  document.getElementById('aiFab').style.display = 'flex';
   loadTodayStatus();
   loadHistory();
 }
@@ -511,10 +585,41 @@ async function loadHistory() {
 function logout() {
   clearInterval(timerInterval);
   stopAllCams();
+  closeAiSheet();
+  document.getElementById('aiFab').style.display = 'none';
   currentUser = null; attId = null; regB64 = null; verifyB64 = null;
   document.getElementById('empId').value = '';
   document.getElementById('pwd').value = '';
   showScreen('s-login');
+}
+
+// ─── AI INSIGHTS BOTTOM SHEET ───
+function openAiSheet() {
+  document.getElementById('aiBackdrop').classList.add('open');
+  document.getElementById('aiSheet').classList.add('open');
+}
+function closeAiSheet() {
+  document.getElementById('aiBackdrop').classList.remove('open');
+  document.getElementById('aiSheet').classList.remove('open');
+}
+async function generateAiInsight() {
+  const btn = document.getElementById('aiGenBtn');
+  const box = document.getElementById('aiResult');
+  btn.disabled = true; btn.textContent = 'Thinking…';
+  box.innerHTML = '<div class="ai-result loading"><span class="ai-spinner"></span>Reading your attendance history and writing a personal summary…</div>';
+  try {
+    const r = await fetch(`${API}/api/ai/my-insight/${currentUser.employee_id}`);
+    const d = await r.json();
+    if (!d.ai_used) {
+      box.innerHTML = `<div class="ai-result error">⚠️ ${d.error || d.message || 'AI insight is not available right now.'}</div>`;
+    } else {
+      box.innerHTML = `<div class="ai-result">${d.insight}</div><div class="ai-meta">Generated by ${d.provider} · ${new Date().toLocaleTimeString()}</div>`;
+    }
+  } catch(e) {
+    box.innerHTML = `<div class="ai-result error">⚠️ Request failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ Get my insight';
+  }
 }
 </script>
 </body>
