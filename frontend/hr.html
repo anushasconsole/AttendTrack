@@ -10,10 +10,10 @@
   --bg:#06040f;--bg2:#0d0820;
   --purple:#6c2bd9;--purple-mid:#9b59f5;--purple-light:#c084fc;
   --violet:#7c3aed;--pink:#e879f9;--green:#4ade80;--red:#ef4444;
-  --amber:#f59e0b;--blue:#3b82f6;
+  --amber:#f59e0b;--blue:#3b82f6;--cyan:#22d3ee;
   --white:#f8f4ff;--white-dim:rgba(248,244,255,0.65);
   --white-faint:rgba(248,244,255,0.10);--glow:rgba(124,58,237,0.4);
-  --border:rgba(156,84,245,0.22);
+  --border:rgba(156,84,245,0.22);--cyan-glow:rgba(34,211,238,0.35);
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 body{background:var(--bg);color:var(--white);font-family:'DM Sans',sans-serif;min-height:100vh}
@@ -86,18 +86,62 @@ select option{background:#1a0a3d}
 .face-tag{font-size:.65rem;padding:.15rem .5rem;border-radius:100px;font-weight:600;margin-top:.35rem;display:inline-block}
 .face-yes{background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.3)}
 .face-no{background:rgba(245,158,11,.1);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
-.ai-panel{background:linear-gradient(160deg,var(--bg2),rgba(124,58,237,.08));border:1px solid var(--border);border-radius:16px;padding:1.2rem;margin-bottom:1rem}
-.ai-panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:.8rem}
-.ai-panel-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}
-.ai-panel-sub{font-size:.75rem;color:var(--white-dim);margin-top:.2rem;max-width:480px}
-.ai-controls{display:flex;gap:.5rem;align-items:center}
-.ai-controls select{margin:0;min-width:170px;padding:.5rem .7rem}
-.ai-result-box{background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:12px;padding:1rem;margin-top:.6rem;font-size:.85rem;line-height:1.6;white-space:pre-wrap}
-.ai-result-box.loading{color:var(--white-dim);font-style:italic}
-.ai-result-box.error{color:var(--red);border-color:rgba(239,68,68,.3)}
-.ai-meta{font-size:.68rem;color:var(--purple-light);margin-top:.5rem;letter-spacing:.03em}
-.ai-spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--purple-light);border-radius:50%;animation:spin 0.8s linear infinite;margin-right:.4rem;vertical-align:middle}
+
+/* ── Dynamic motion ── */
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.stat-card,.rec-card,.emp-card{animation:riseIn .4s cubic-bezier(.16,1,.3,1) backwards}
+.btn-approve,.btn-reject{transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
+.btn-approve:active,.btn-reject:active{transform:scale(.95)}
+.tab{transition:background .25s,color .25s,transform .15s}
+.tab:active{transform:scale(.96)}
+
+/* ── AI floating trigger + bottom sheet (shared design across all 3 portals) ── */
+.ai-fab{position:fixed;bottom:1.4rem;right:1.4rem;z-index:200;display:flex;align-items:center;gap:.5rem;
+  background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;
+  padding:.7rem 1.1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;
+  box-shadow:0 4px 24px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4);transition:transform .25s,box-shadow .25s}
+.ai-fab:hover{transform:translateY(-3px);box-shadow:0 8px 30px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4)}
+.ai-fab:active{transform:translateY(-1px) scale(.97)}
+.ai-fab .spark{font-size:1rem;animation:sparkle 2.2s ease-in-out infinite}
+@keyframes sparkle{0%,100%{transform:scale(1) rotate(0deg)}50%{transform:scale(1.15) rotate(12deg)}}
+.ai-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:300;
+  opacity:0;pointer-events:none;transition:opacity .3s}
+.ai-backdrop.open{opacity:1;pointer-events:auto}
+.ai-sheet{position:fixed;left:0;right:0;bottom:0;z-index:301;max-width:760px;margin:0 auto;
+  background:linear-gradient(170deg,var(--bg2),#0a0518);border:1px solid var(--border);
+  border-bottom:none;border-radius:24px 24px 0 0;box-shadow:0 -10px 50px rgba(0,0,0,.6);
+  transform:translateY(105%);transition:transform .4s cubic-bezier(.16,1,.3,1);
+  max-height:78vh;display:flex;flex-direction:column}
+.ai-sheet.open{transform:translateY(0)}
+.ai-handle{width:38px;height:4px;background:var(--white-faint);border-radius:3px;margin:.7rem auto .3rem}
+.ai-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:.4rem 1.3rem .8rem;border-bottom:1px solid var(--border)}
+.ai-sheet-title{display:flex;align-items:center;gap:.5rem;font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}
+.ai-sheet-title .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan-glow)}
+.ai-sheet-close{background:var(--white-faint);border:1px solid var(--border);color:var(--white-dim);
+  width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:1rem;line-height:1;display:flex;align-items:center;justify-content:center}
+.ai-sheet-close:hover{border-color:var(--red);color:var(--red)}
+.ai-sheet-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;flex:1}
+.ai-sheet-sub{font-size:.78rem;color:var(--white-dim);margin-bottom:1rem}
+#aiSiteSelect{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:10px;
+  padding:.6rem .8rem;color:var(--white);font-family:'DM Sans',sans-serif;font-size:.85rem;outline:none}
+#aiSiteSelect option{background:#1a0a3d}
+.ai-gen-btn{width:100%;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;
+  border-radius:100px;padding:.75rem;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;
+  cursor:pointer;box-shadow:0 0 24px var(--cyan-glow);transition:transform .2s}
+.ai-gen-btn:active{transform:scale(.98)}
+.ai-gen-btn:disabled{opacity:.5;cursor:not-allowed}
+.ai-result{background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:14px;padding:1rem;
+  margin-top:1rem;font-size:.85rem;line-height:1.65;white-space:pre-wrap;animation:riseIn .35s cubic-bezier(.16,1,.3,1)}
+.ai-result.loading{color:var(--white-dim);font-style:italic;display:flex;align-items:center;gap:.5rem}
+.ai-result.error{color:var(--red);border-color:rgba(239,68,68,.3)}
+.ai-spinner{width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--cyan);
+  border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
+.ai-meta{font-size:.68rem;color:var(--cyan);margin-top:.6rem;letter-spacing:.03em;opacity:.85}
+@media(prefers-reduced-motion:reduce){
+  .stat-card,.rec-card,.emp-card,.ai-fab .spark{animation:none!important}
+  .ai-sheet,.ai-backdrop,.btn-approve,.btn-reject,.tab{transition:none!important}
+}
 </style>
 </head>
 <body>
@@ -146,7 +190,6 @@ select option{background:#1a0a3d}
       <div class="tab active" onclick="switchTab('pending')">🔴 Pending HR Approval <span class="tab-badge" id="hrBadge">0</span></div>
       <div class="tab" onclick="switchTab('all')">📋 All Records</div>
       <div class="tab" onclick="switchTab('employees')">👷 Employees</div>
-      <div class="tab" onclick="switchTab('ai')">🤖 AI Insights</div>
     </div>
 
     <div id="filterArea" style="display:none" class="filters">
@@ -154,23 +197,29 @@ select option{background:#1a0a3d}
       <input type="text" id="filterEmp" placeholder="Filter by Employee ID" onchange="loadAll()">
     </div>
 
-    <div id="aiArea" style="display:none">
-      <div class="ai-panel">
-        <div class="ai-panel-head">
-          <div>
-            <div class="ai-panel-title">AI-Generated Site Report</div>
-            <div class="ai-panel-sub">Sends real attendance data to an LLM and asks it to analyze overtime risk and patterns. Not a fixed rule — actual AI reasoning over your data.</div>
-          </div>
-          <div class="ai-controls">
-            <select id="aiSiteSelect"><option value="1">Main Construction Site</option><option value="2">Warehouse Zone A</option></select>
-            <button class="btn-approve" id="aiGenBtn" onclick="generateAISummary()">✨ Generate</button>
-          </div>
-        </div>
-        <div id="aiResult"></div>
-      </div>
-    </div>
-
     <div id="recList"></div>
+  </div>
+</div>
+
+<!-- ── AI Insights — floating trigger + bottom sheet (shared across all portals) ── -->
+<button class="ai-fab" id="aiFab" onclick="openAiSheet()" style="display:none">
+  <span class="spark">✨</span> AI Insights
+</button>
+<div class="ai-backdrop" id="aiBackdrop" onclick="closeAiSheet()"></div>
+<div class="ai-sheet" id="aiSheet">
+  <div class="ai-handle"></div>
+  <div class="ai-sheet-head">
+    <div class="ai-sheet-title"><span class="dot"></span> AI Insights</div>
+    <button class="ai-sheet-close" onclick="closeAiSheet()">✕</button>
+  </div>
+  <div class="ai-sheet-body">
+    <div class="ai-sheet-sub">Sends real attendance data to an LLM and asks it to analyze overtime risk and patterns — actual AI reasoning over your data, not a fixed rule.</div>
+    <select id="aiSiteSelect" style="margin-bottom:.7rem">
+      <option value="1">Main Construction Site</option>
+      <option value="2">Warehouse Zone A</option>
+    </select>
+    <button class="ai-gen-btn" id="aiGenBtn" onclick="generateAISummary()">✨ Generate report</button>
+    <div id="aiResult"></div>
   </div>
 </div>
 
@@ -203,6 +252,7 @@ async function doLogin() {
     document.getElementById('nav').style.display = 'flex';
     document.getElementById('app').style.display = 'block';
     document.getElementById('navName').textContent = currentUser.name;
+    document.getElementById('aiFab').style.display = 'flex';
     loadAll(); startRefresh();
   } catch(e) {
     const m = document.getElementById('loginMsg');
@@ -233,39 +283,45 @@ async function loadStats() {
 
 function switchTab(tab) {
   currentTab = tab;
-  const tabs = ['pending','all','employees','ai'];
+  const tabs = ['pending','all','employees'];
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', tabs[i] === tab));
   document.getElementById('filterArea').style.display = tab === 'all' ? 'flex' : 'none';
-  document.getElementById('aiArea').style.display = tab === 'ai' ? 'block' : 'none';
-  document.getElementById('recList').style.display = tab === 'ai' ? 'none' : 'block';
   loadTab();
 }
 
 async function loadTab() {
   if (currentTab === 'pending') await loadPending();
   else if (currentTab === 'all') await loadAllRecs();
-  else if (currentTab === 'employees') await loadEmployees();
-  // 'ai' tab is generate-on-demand, nothing to auto-load
+  else await loadEmployees();
 }
 
+// ─── AI INSIGHTS BOTTOM SHEET ───
+function openAiSheet() {
+  document.getElementById('aiBackdrop').classList.add('open');
+  document.getElementById('aiSheet').classList.add('open');
+}
+function closeAiSheet() {
+  document.getElementById('aiBackdrop').classList.remove('open');
+  document.getElementById('aiSheet').classList.remove('open');
+}
 async function generateAISummary() {
   const siteId = document.getElementById('aiSiteSelect').value;
   const btn = document.getElementById('aiGenBtn');
   const box = document.getElementById('aiResult');
   btn.disabled = true; btn.textContent = 'Generating…';
-  box.innerHTML = '<div class="ai-result-box loading"><span class="ai-spinner"></span>Asking the AI to analyze attendance data — this calls a real LLM and can take a few seconds…</div>';
+  box.innerHTML = '<div class="ai-result loading"><span class="ai-spinner"></span>Asking the AI to analyze attendance data — this calls a real LLM and can take a few seconds…</div>';
   try {
     const r = await fetch(`${API}/api/ai/site-summary/${siteId}`);
     const d = await r.json();
     if (!d.ai_used) {
-      box.innerHTML = `<div class="ai-result-box error">⚠️ AI not available: ${d.error || d.message || 'Unknown error'}<br><br>This usually means AI_API_KEY isn't set in the server's environment yet (Groq or OpenRouter).</div>`;
+      box.innerHTML = `<div class="ai-result error">⚠️ AI not available: ${d.error || d.message || 'Unknown error'}<br><br>This usually means AI_API_KEY isn't set in the server's environment yet (Groq or OpenRouter).</div>`;
     } else {
-      box.innerHTML = `<div class="ai-result-box">${d.summary}</div><div class="ai-meta">Generated by ${d.provider} (${d.model}) · ${d.site_name} · ${new Date().toLocaleTimeString()}</div>`;
+      box.innerHTML = `<div class="ai-result">${d.summary}</div><div class="ai-meta">Generated by ${d.provider} (${d.model}) · ${d.site_name} · ${new Date().toLocaleTimeString()}</div>`;
     }
   } catch(e) {
-    box.innerHTML = `<div class="ai-result-box error">⚠️ Request failed: ${e.message}</div>`;
+    box.innerHTML = `<div class="ai-result error">⚠️ Request failed: ${e.message}</div>`;
   } finally {
-    btn.disabled = false; btn.textContent = '✨ Generate';
+    btn.disabled = false; btn.textContent = '✨ Generate report';
   }
 }
 
@@ -362,6 +418,8 @@ async function loadEmployees() {
 
 function logout() {
   clearInterval(refreshTimer);
+  closeAiSheet();
+  document.getElementById('aiFab').style.display = 'none';
   currentUser = null;
   document.getElementById('loginView').style.display = 'flex';
   document.getElementById('nav').style.display = 'none';
