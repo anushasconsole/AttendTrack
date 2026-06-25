@@ -41,6 +41,7 @@ db_pool = pg_pool.ThreadedConnectionPool(
 )
 print("✅ PostgreSQL pool ready")
 
+<<<<<<< HEAD
 # ─────────────────────────────────────────────
 # OVERTIME ALERTS — WhatsApp via Twilio (optional, degrades gracefully)
 # ─────────────────────────────────────────────
@@ -143,6 +144,9 @@ async def call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 600) 
         return {"ok": True, "text": text, "error": None}
     except Exception as e:
         return {"ok": False, "text": None, "error": f"{type(e).__name__}: {e}"}
+=======
+app = FastAPI(title="AttendTrack API", version="3.0.0")
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
@@ -244,6 +248,7 @@ def init_db():
             hr_verified_at      TIMESTAMP,
             date                DATE NOT NULL
         )""")
+<<<<<<< HEAD
         c.execute("""CREATE TABLE IF NOT EXISTS overtime_alerts (
             id            SERIAL PRIMARY KEY,
             employee_id   TEXT NOT NULL REFERENCES users(employee_id),
@@ -256,12 +261,17 @@ def init_db():
             created_at    TIMESTAMP DEFAULT NOW(),
             UNIQUE(employee_id, period_start, alert_level)
         )""")
+=======
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_att_emp_date  ON attendance(employee_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_site_date ON attendance(site_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_status    ON attendance(status)",
             "CREATE INDEX IF NOT EXISTS idx_att_date      ON attendance(date DESC)",
+<<<<<<< HEAD
             "CREATE INDEX IF NOT EXISTS idx_ot_emp_period ON overtime_alerts(employee_id, period_start)",
+=======
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
         ]:
             c.execute(idx)
         conn.commit()
@@ -317,6 +327,7 @@ def calc_hours(login, logout) -> float:
         return round((logout-login).total_seconds()/3600, 2)
     except: return 0.0
 
+<<<<<<< HEAD
 # ─────────────────────────────────────────────
 # OVERTIME CHECK — runs after every checkout
 # ─────────────────────────────────────────────
@@ -367,6 +378,8 @@ def check_and_alert_overtime(c, employee_id: str, phone: str, name: str, as_of: 
               (employee_id, period_start, period_end, total_hours, level, "whatsapp", result.get("sent", False)))
     return {"alert_fired": True, "level": level, "total_hours": total_hours, "send_result": result}
 
+=======
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
 def clean_b64(b64: str) -> str:
     return b64.split(",")[1] if "," in b64 else b64
 
@@ -637,10 +650,13 @@ async def checkout(req: CheckoutReq):
         c.execute("""UPDATE attendance SET logout_time=%s,logout_lat=%s,logout_lng=%s,
                             hours_worked=%s,status='pending_manager' WHERE id=%s""",
                   (now, req.latitude, req.longitude, hours, req.attendance_id))
+<<<<<<< HEAD
 
         c.execute("SELECT name, phone FROM users WHERE employee_id=%s", (req.employee_id,))
         u = c.fetchone()
         overtime_result = check_and_alert_overtime(c, req.employee_id, u["phone"], u["name"], now)
+=======
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
         conn.commit()
     except HTTPException:
         conn.rollback(); raise
@@ -649,8 +665,12 @@ async def checkout(req: CheckoutReq):
     finally:
         release_db(conn)
     return {"success": True, "message": f"✅ Checked out. You worked {hours} hours.",
+<<<<<<< HEAD
             "hours_worked": hours, "logout_time": now.isoformat(), "distance_from_site": int(dist),
             "overtime": overtime_result}
+=======
+            "hours_worked": hours, "logout_time": now.isoformat(), "distance_from_site": int(dist)}
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
 
 # ─────────────────────────────────────────────
 # ATTENDANCE TODAY / HISTORY
@@ -838,6 +858,7 @@ async def hr_verify(req: HRVerifyReq):
         release_db(conn)
     return {"success": True, "message": f"Record {new_status}."}
 
+<<<<<<< HEAD
 # ─────────────────────────────────────────────
 # ANALYTICS — historical-data-driven, NOT machine learning.
 # Computes real trends from past attendance records and projects
@@ -1010,6 +1031,8 @@ async def ai_checkin_flag(attendance_id: int):
         "error": result["error"] if not result["ok"] else None,
     }
 
+=======
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
 @app.get("/api/employees")
 async def get_employees():
     conn = get_db()
@@ -1030,4 +1053,8 @@ async def get_sites():
         c.execute("SELECT * FROM sites")
         return {"sites": [dict(r) for r in c.fetchall()]}
     finally:
+<<<<<<< HEAD
         release_db(conn)
+=======
+        release_db(conn)
+>>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
