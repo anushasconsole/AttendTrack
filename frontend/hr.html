@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -87,6 +86,18 @@ select option{background:#1a0a3d}
 .face-tag{font-size:.65rem;padding:.15rem .5rem;border-radius:100px;font-weight:600;margin-top:.35rem;display:inline-block}
 .face-yes{background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.3)}
 .face-no{background:rgba(245,158,11,.1);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
+.ai-panel{background:linear-gradient(160deg,var(--bg2),rgba(124,58,237,.08));border:1px solid var(--border);border-radius:16px;padding:1.2rem;margin-bottom:1rem}
+.ai-panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:.8rem}
+.ai-panel-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}
+.ai-panel-sub{font-size:.75rem;color:var(--white-dim);margin-top:.2rem;max-width:480px}
+.ai-controls{display:flex;gap:.5rem;align-items:center}
+.ai-controls select{margin:0;min-width:170px;padding:.5rem .7rem}
+.ai-result-box{background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:12px;padding:1rem;margin-top:.6rem;font-size:.85rem;line-height:1.6;white-space:pre-wrap}
+.ai-result-box.loading{color:var(--white-dim);font-style:italic}
+.ai-result-box.error{color:var(--red);border-color:rgba(239,68,68,.3)}
+.ai-meta{font-size:.68rem;color:var(--purple-light);margin-top:.5rem;letter-spacing:.03em}
+.ai-spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--purple-light);border-radius:50%;animation:spin 0.8s linear infinite;margin-right:.4rem;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -135,11 +146,28 @@ select option{background:#1a0a3d}
       <div class="tab active" onclick="switchTab('pending')">🔴 Pending HR Approval <span class="tab-badge" id="hrBadge">0</span></div>
       <div class="tab" onclick="switchTab('all')">📋 All Records</div>
       <div class="tab" onclick="switchTab('employees')">👷 Employees</div>
+      <div class="tab" onclick="switchTab('ai')">🤖 AI Insights</div>
     </div>
 
     <div id="filterArea" style="display:none" class="filters">
       <input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()">
       <input type="text" id="filterEmp" placeholder="Filter by Employee ID" onchange="loadAll()">
+    </div>
+
+    <div id="aiArea" style="display:none">
+      <div class="ai-panel">
+        <div class="ai-panel-head">
+          <div>
+            <div class="ai-panel-title">AI-Generated Site Report</div>
+            <div class="ai-panel-sub">Sends real attendance data to an LLM and asks it to analyze overtime risk and patterns. Not a fixed rule — actual AI reasoning over your data.</div>
+          </div>
+          <div class="ai-controls">
+            <select id="aiSiteSelect"><option value="1">Main Construction Site</option><option value="2">Warehouse Zone A</option></select>
+            <button class="btn-approve" id="aiGenBtn" onclick="generateAISummary()">✨ Generate</button>
+          </div>
+        </div>
+        <div id="aiResult"></div>
+      </div>
     </div>
 
     <div id="recList"></div>
@@ -205,16 +233,40 @@ async function loadStats() {
 
 function switchTab(tab) {
   currentTab = tab;
-  const tabs = ['pending','all','employees'];
+  const tabs = ['pending','all','employees','ai'];
   document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', tabs[i] === tab));
   document.getElementById('filterArea').style.display = tab === 'all' ? 'flex' : 'none';
+  document.getElementById('aiArea').style.display = tab === 'ai' ? 'block' : 'none';
+  document.getElementById('recList').style.display = tab === 'ai' ? 'none' : 'block';
   loadTab();
 }
 
 async function loadTab() {
   if (currentTab === 'pending') await loadPending();
   else if (currentTab === 'all') await loadAllRecs();
-  else await loadEmployees();
+  else if (currentTab === 'employees') await loadEmployees();
+  // 'ai' tab is generate-on-demand, nothing to auto-load
+}
+
+async function generateAISummary() {
+  const siteId = document.getElementById('aiSiteSelect').value;
+  const btn = document.getElementById('aiGenBtn');
+  const box = document.getElementById('aiResult');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  box.innerHTML = '<div class="ai-result-box loading"><span class="ai-spinner"></span>Asking the AI to analyze attendance data — this calls a real LLM and can take a few seconds…</div>';
+  try {
+    const r = await fetch(`${API}/api/ai/site-summary/${siteId}`);
+    const d = await r.json();
+    if (!d.ai_used) {
+      box.innerHTML = `<div class="ai-result-box error">⚠️ AI not available: ${d.error || d.message || 'Unknown error'}<br><br>This usually means AI_API_KEY isn't set in the server's environment yet (Groq or OpenRouter).</div>`;
+    } else {
+      box.innerHTML = `<div class="ai-result-box">${d.summary}</div><div class="ai-meta">Generated by ${d.provider} (${d.model}) · ${d.site_name} · ${new Date().toLocaleTimeString()}</div>`;
+    }
+  } catch(e) {
+    box.innerHTML = `<div class="ai-result-box error">⚠️ Request failed: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ Generate';
+  }
 }
 
 async function loadPending() {
@@ -318,4 +370,3 @@ function logout() {
 </script>
 </body>
 </html>
-
