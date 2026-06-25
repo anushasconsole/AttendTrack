@@ -44,8 +44,8 @@ print("✅ PostgreSQL pool ready")
 # ─────────────────────────────────────────────
 # OVERTIME ALERTS — WhatsApp via Twilio (optional, degrades gracefully)
 # ─────────────────────────────────────────────
-OVERTIME_LIMIT_HOURS = float(os.getenv("OVERTIME_LIMIT_HOURS", "105"))
-OVERTIME_WARN_AT     = float(os.getenv("OVERTIME_WARN_AT", "0.9"))  # warn at 90% of limit
+OVERTIME_LIMIT_HOURS = float(os.getenv("OVERTIME_LIMIT_HOURS", "0.01"))
+OVERTIME_WARN_AT     = float(os.getenv("OVERTIME_WARN_AT", "0.5"))  # warn at 90% of limit
 
 TWILIO_SID        = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
