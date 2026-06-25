@@ -11,9 +11,5 @@ Pillow>=10.4.0
 numpy==1.26.4
 dlib==19.24.1
 face_recognition==1.3.0
-<<<<<<< HEAD
 twilio==9.0.4
-# AI analysis uses httpx (already listed above) to call Groq or OpenRouter
-# directly via their OpenAI-compatible REST endpoints — no extra SDK needed.
-=======
->>>>>>> a5ee307f5f322edc37ba42650bca080b30442835
+
