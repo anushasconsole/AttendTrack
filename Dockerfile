@@ -30,6 +30,10 @@ RUN pip install --no-cache-dir \
     psycopg2-binary==2.9.9 \
     "Pillow>=10.4.0"
 
+# WhatsApp overtime alerts — pure-Python, installs fast, own layer so it
+# doesn't bust the cache for the slow dlib/face_recognition layers above
+RUN pip install --no-cache-dir twilio==9.0.4
+
 COPY . .
 
 ENV PORT=8000
