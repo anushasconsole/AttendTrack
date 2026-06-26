@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
 
+from ml.behaviour_model import compute_behaviour_signals
+
 load_dotenv()
 
 # ─────────────────────────────────────────────
@@ -912,6 +914,120 @@ async def employee_analytics(employee_id: str, lookback_days: int = 90):
         "estimated_days_until_limit_at_current_pace": days_to_limit,
         "method": "linear projection from trailing average — statistical estimate, not a trained model"
     }
+
+@app.get("/api/ml/behaviour/{employee_id}")
+async def behaviour_signals(employee_id: str, lookback_days: int = 90):
+    """
+    REAL ML — unsupervised anomaly detection (IsolationForest, scikit-learn)
+    fitted per-employee on their own trailing history, plus a complementary
+    trend-drift check for slow, gradual changes that point-anomaly models
+    can't see (e.g. hours quietly creeping up over weeks).
+
+    This replaces the old frontend-only hardcoded thresholds
+    (portal.js: totalHours >= 90, lateCount+earlyCount >= 4, etc.) with
+    server-side computed, auditable signals. It outputs NUMBERS, not a
+    verdict in English — see /api/ai/behaviour-report for the LLM layer
+    that turns these signals into a plain-English explanation and
+    recommendation.
+    """
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name, phone FROM users WHERE employee_id=%s", (employee_id,))
+        user = c.fetchone()
+        if not user:
+            raise HTTPException(404, "Employee not found")
+
+        c.execute("""SELECT date, login_time, logout_time, hours_worked, status FROM attendance
+                     WHERE employee_id=%s AND date >= CURRENT_DATE - INTERVAL '%s days'
+                     ORDER BY date ASC""", (employee_id, lookback_days))
+        rows = [dict(r) for r in c.fetchall()]
+
+        as_of = datetime.now()
+        period_start, period_end = _month_bounds(as_of)
+        c.execute("""SELECT COALESCE(SUM(hours_worked),0) as total FROM attendance
+                     WHERE employee_id=%s AND date >= %s AND date < %s AND hours_worked IS NOT NULL""",
+                  (employee_id, period_start, period_end))
+        month_to_date_hours = float(c.fetchone()["total"])
+    finally:
+        release_db(conn)
+
+    # Reuse the same linear projection already computed elsewhere in the
+    # file for consistency between endpoints, rather than recomputing it
+    # with different logic in two places.
+    rows_with_hours = [r for r in rows if r.get("hours_worked") is not None]
+    if rows_with_hours:
+        avg_per_day = sum(r["hours_worked"] for r in rows_with_hours) / len(rows_with_hours)
+        days_so_far = (as_of.date() - period_start).days + 1
+        days_in_month = (period_end - period_start).days
+        days_left = max(0, days_in_month - days_so_far)
+        projected_month_end_hours = month_to_date_hours + avg_per_day * days_left
+    else:
+        projected_month_end_hours = month_to_date_hours
+
+    signals = compute_behaviour_signals(
+        records=rows,
+        overtime_limit_hours=OVERTIME_LIMIT_HOURS,
+        month_to_date_hours=month_to_date_hours,
+        projected_month_end_hours=projected_month_end_hours,
+    )
+    return {"employee_id": employee_id, "name": user["name"], "lookback_days": lookback_days, **signals}
+
+
+@app.get("/api/ai/behaviour-report/{employee_id}")
+async def ai_behaviour_report(employee_id: str, lookback_days: int = 90):
+    """
+    Real AI feature: takes the ML-computed behaviour signals above (facts
+    and scores only) and asks an LLM to reason over them the way a manager
+    would — what's notable, how serious, and what action to consider. The
+    LLM never invents data; it only narrates what the ML/stat layer already
+    computed. This is the server-side, ML-backed replacement for the old
+    hardcoded "Possible burnout or leave misuse" rule text in portal.js.
+    """
+    signals = await behaviour_signals(employee_id, lookback_days)
+
+    if signals.get("data_points", 0) < 5:
+        return {"employee_id": employee_id, "ai_used": False,
+                "message": "Not enough attendance history yet to analyze behaviour patterns.",
+                "raw_signals": signals}
+
+    system_prompt = (
+        "You are an HR analytics assistant reviewing one employee's attendance behaviour "
+        "for a workforce attendance system. You will be given ML-computed signals: an "
+        "unsupervised anomaly score for recent days (from IsolationForest, fitted on this "
+        "employee's own history), a trend-drift check for gradually rising hours, and basic "
+        "counts (late arrivals, early departures, rejected records, overtime pace). "
+        "Write a short plain-English assessment for a manager: 1-2 sentence overview of what "
+        "the data shows, a clear severity read (low/medium/high concern), and one concrete, "
+        "practical suggested action. Base every claim ONLY on the numbers given — do not "
+        "invent context, causes, or personal circumstances you weren't told about. If the "
+        "data doesn't show anything concerning, say so plainly rather than manufacturing a "
+        "concern."
+    )
+    user_prompt = (
+        f"Employee: {signals['name']}\n"
+        f"Data points (days on record): {signals['data_points']}\n"
+        f"Late arrivals: {signals['late_arrivals']}, Early departures: {signals['early_departures']}, "
+        f"Rejected records: {signals['rejected_records']}\n"
+        f"Month-to-date hours: {signals['month_to_date_hours']}, "
+        f"Projected month-end: {signals['projected_month_end_hours']}, "
+        f"Overtime limit: {signals['overtime_limit_hours']} "
+        f"(pace ratio to limit: {signals['pace_ratio_to_limit']})\n\n"
+        f"Anomaly detection (per-employee IsolationForest baseline): {json.dumps(signals['anomaly_detection'])}\n\n"
+        f"Trend drift (early vs recent window average hours): {json.dumps(signals['trend_drift'])}\n"
+    )
+
+    result = await call_llm(system_prompt, user_prompt, max_tokens=300)
+    return {
+        "employee_id": employee_id, "name": signals["name"], "ai_used": result["ok"],
+        "provider": AI_PROVIDER if result["ok"] else None,
+        "model": AI_MODEL if result["ok"] else None,
+        "assessment": result["text"] if result["ok"] else None,
+        "error": result["error"] if not result["ok"] else None,
+        "worth_human_review": signals.get("worth_human_review"),
+        "raw_signals": signals,
+    }
+
 
 @app.get("/api/analytics/site/{site_id}")
 async def site_analytics(site_id: int):
