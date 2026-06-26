@@ -197,9 +197,13 @@
   function startRefresh() {
     clearInterval(state.refreshTimer);
     state.refreshTimer = setInterval(() => {
-      loadStats().catch(() => {});
+      loadSummary().catch(() => {});
       loadTab().catch(() => {});
     }, 30000);
+  }
+
+  function loadStats() {
+    return loadSummary();
   }
 
   function stopRefresh() {
