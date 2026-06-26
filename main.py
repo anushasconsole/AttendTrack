@@ -1,14 +1,13 @@
-import os, json, math, hashlib, base64, io
+import os, json, math, hashlib, base64, io, asyncio
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from dotenv import load_dotenv
-
-from ml.behaviour_model import compute_behaviour_signals
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
@@ -83,7 +82,49 @@ def send_whatsapp_alert(to_phone: str, message: str) -> dict:
         print(f"[OVERTIME ALERT FAILED] to={to_phone}: {type(e).__name__}: {e}", flush=True)
         return {"sent": False, "reason": str(e)}
 
-app = FastAPI(title="AttendTrack API", version="3.0.0")
+# ─────────────────────────────────────────────
+# ML ENGINE — scikit-learn overtime & anomaly models
+# ─────────────────────────────────────────────
+try:
+    import ml_engine
+    ML_ENGINE_READY = True
+    print("✅ ml_engine loaded — ML overtime prediction and anomaly detection active")
+except Exception as _ml_err:
+    ml_engine = None
+    ML_ENGINE_READY = False
+    print(f"⚠️  ml_engine not loaded: {_ml_err}")
+
+# ─────────────────────────────────────────────
+# SCHEDULER — APScheduler for automatic reports
+# ─────────────────────────────────────────────
+SCHEDULER_READY = False
+_scheduler = None
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    SCHEDULER_READY = True
+    print("✅ APScheduler available — scheduled reports active")
+except ImportError:
+    print("⚠️  apscheduler not installed — scheduled reports disabled (pip install apscheduler)")
+
+# ─────────────────────────────────────────────
+# APP LIFESPAN — starts scheduler on boot, stops cleanly on shutdown
+# ─────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    global _scheduler
+    if SCHEDULER_READY:
+        _scheduler = AsyncIOScheduler()
+        # Boot all persisted schedules from DB
+        await _boot_schedules()
+        _scheduler.start()
+        print("✅ Scheduler started")
+    yield
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+        print("Scheduler stopped")
+
+app = FastAPI(title="AttendTrack API", version="4.0.0", lifespan=lifespan)
 app.mount("/frontend", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")), name="frontend")
 
 # ─────────────────────────────────────────────
@@ -268,12 +309,49 @@ def init_db():
             created_at    TIMESTAMP DEFAULT NOW(),
             UNIQUE(employee_id, period_start, alert_level)
         )""")
+        # ── New: employee Q&A conversation history ──────────────────────────────
+        c.execute("""CREATE TABLE IF NOT EXISTS employee_qa (
+            id          SERIAL PRIMARY KEY,
+            employee_id TEXT NOT NULL REFERENCES users(employee_id),
+            question    TEXT NOT NULL,
+            answer      TEXT NOT NULL,
+            created_at  TIMESTAMP DEFAULT NOW()
+        )""")
+        # ── New: scheduled report definitions ──────────────────────────────────
+        c.execute("""CREATE TABLE IF NOT EXISTS scheduled_reports (
+            id           SERIAL PRIMARY KEY,
+            name         TEXT NOT NULL,
+            report_type  TEXT NOT NULL CHECK(report_type IN ('site_summary','overtime_risk','behaviour','full_hr')),
+            frequency    TEXT NOT NULL CHECK(frequency IN ('daily','weekly','monthly')),
+            hour         INTEGER NOT NULL DEFAULT 18,
+            site_id      INTEGER REFERENCES sites(id),
+            recipients   JSONB NOT NULL DEFAULT '[]',
+            delivery     TEXT NOT NULL DEFAULT 'whatsapp' CHECK(delivery IN ('whatsapp','log')),
+            enabled      BOOLEAN DEFAULT TRUE,
+            last_run_at  TIMESTAMP,
+            next_run_at  TIMESTAMP,
+            created_by   TEXT REFERENCES users(employee_id),
+            created_at   TIMESTAMP DEFAULT NOW()
+        )""")
+        # ── New: scheduled report run log ──────────────────────────────────────
+        c.execute("""CREATE TABLE IF NOT EXISTS report_runs (
+            id           SERIAL PRIMARY KEY,
+            schedule_id  INTEGER NOT NULL REFERENCES scheduled_reports(id),
+            ran_at       TIMESTAMP DEFAULT NOW(),
+            status       TEXT NOT NULL CHECK(status IN ('ok','error','skipped')),
+            ai_used      BOOLEAN DEFAULT FALSE,
+            report_text  TEXT,
+            error_msg    TEXT,
+            delivered_to JSONB DEFAULT '[]'
+        )""")
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_att_emp_date  ON attendance(employee_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_site_date ON attendance(site_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_status    ON attendance(status)",
             "CREATE INDEX IF NOT EXISTS idx_att_date      ON attendance(date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_ot_emp_period ON overtime_alerts(employee_id, period_start)",
+            "CREATE INDEX IF NOT EXISTS idx_qa_emp        ON employee_qa(employee_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_rpt_runs      ON report_runs(schedule_id, ran_at DESC)",
         ]:
             c.execute(idx)
         conn.commit()
@@ -493,6 +571,20 @@ class HRVerifyReq(BaseModel):
     hr_id:         str
     approved:      bool
     note:          Optional[str] = None
+
+class EmployeeAskReq(BaseModel):
+    employee_id: str
+    question:    str
+
+class ScheduleReportReq(BaseModel):
+    name:        str
+    report_type: str          # site_summary | overtime_risk | behaviour | full_hr
+    frequency:   str          # daily | weekly | monthly
+    hour:        int = 18     # 0-23, hour of day to run
+    site_id:     Optional[int] = None
+    recipients:  List[str] = []   # list of phone numbers
+    delivery:    str = "whatsapp" # whatsapp | log
+    created_by:  str          # HR employee_id
 
 # ─────────────────────────────────────────────
 # LOGIN
@@ -915,120 +1007,6 @@ async def employee_analytics(employee_id: str, lookback_days: int = 90):
         "method": "linear projection from trailing average — statistical estimate, not a trained model"
     }
 
-@app.get("/api/ml/behaviour/{employee_id}")
-async def behaviour_signals(employee_id: str, lookback_days: int = 90):
-    """
-    REAL ML — unsupervised anomaly detection (IsolationForest, scikit-learn)
-    fitted per-employee on their own trailing history, plus a complementary
-    trend-drift check for slow, gradual changes that point-anomaly models
-    can't see (e.g. hours quietly creeping up over weeks).
-
-    This replaces the old frontend-only hardcoded thresholds
-    (portal.js: totalHours >= 90, lateCount+earlyCount >= 4, etc.) with
-    server-side computed, auditable signals. It outputs NUMBERS, not a
-    verdict in English — see /api/ai/behaviour-report for the LLM layer
-    that turns these signals into a plain-English explanation and
-    recommendation.
-    """
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        c.execute("SELECT name, phone FROM users WHERE employee_id=%s", (employee_id,))
-        user = c.fetchone()
-        if not user:
-            raise HTTPException(404, "Employee not found")
-
-        c.execute("""SELECT date, login_time, logout_time, hours_worked, status FROM attendance
-                     WHERE employee_id=%s AND date >= CURRENT_DATE - INTERVAL '%s days'
-                     ORDER BY date ASC""", (employee_id, lookback_days))
-        rows = [dict(r) for r in c.fetchall()]
-
-        as_of = datetime.now()
-        period_start, period_end = _month_bounds(as_of)
-        c.execute("""SELECT COALESCE(SUM(hours_worked),0) as total FROM attendance
-                     WHERE employee_id=%s AND date >= %s AND date < %s AND hours_worked IS NOT NULL""",
-                  (employee_id, period_start, period_end))
-        month_to_date_hours = float(c.fetchone()["total"])
-    finally:
-        release_db(conn)
-
-    # Reuse the same linear projection already computed elsewhere in the
-    # file for consistency between endpoints, rather than recomputing it
-    # with different logic in two places.
-    rows_with_hours = [r for r in rows if r.get("hours_worked") is not None]
-    if rows_with_hours:
-        avg_per_day = sum(r["hours_worked"] for r in rows_with_hours) / len(rows_with_hours)
-        days_so_far = (as_of.date() - period_start).days + 1
-        days_in_month = (period_end - period_start).days
-        days_left = max(0, days_in_month - days_so_far)
-        projected_month_end_hours = month_to_date_hours + avg_per_day * days_left
-    else:
-        projected_month_end_hours = month_to_date_hours
-
-    signals = compute_behaviour_signals(
-        records=rows,
-        overtime_limit_hours=OVERTIME_LIMIT_HOURS,
-        month_to_date_hours=month_to_date_hours,
-        projected_month_end_hours=projected_month_end_hours,
-    )
-    return {"employee_id": employee_id, "name": user["name"], "lookback_days": lookback_days, **signals}
-
-
-@app.get("/api/ai/behaviour-report/{employee_id}")
-async def ai_behaviour_report(employee_id: str, lookback_days: int = 90):
-    """
-    Real AI feature: takes the ML-computed behaviour signals above (facts
-    and scores only) and asks an LLM to reason over them the way a manager
-    would — what's notable, how serious, and what action to consider. The
-    LLM never invents data; it only narrates what the ML/stat layer already
-    computed. This is the server-side, ML-backed replacement for the old
-    hardcoded "Possible burnout or leave misuse" rule text in portal.js.
-    """
-    signals = await behaviour_signals(employee_id, lookback_days)
-
-    if signals.get("data_points", 0) < 5:
-        return {"employee_id": employee_id, "ai_used": False,
-                "message": "Not enough attendance history yet to analyze behaviour patterns.",
-                "raw_signals": signals}
-
-    system_prompt = (
-        "You are an HR analytics assistant reviewing one employee's attendance behaviour "
-        "for a workforce attendance system. You will be given ML-computed signals: an "
-        "unsupervised anomaly score for recent days (from IsolationForest, fitted on this "
-        "employee's own history), a trend-drift check for gradually rising hours, and basic "
-        "counts (late arrivals, early departures, rejected records, overtime pace). "
-        "Write a short plain-English assessment for a manager: 1-2 sentence overview of what "
-        "the data shows, a clear severity read (low/medium/high concern), and one concrete, "
-        "practical suggested action. Base every claim ONLY on the numbers given — do not "
-        "invent context, causes, or personal circumstances you weren't told about. If the "
-        "data doesn't show anything concerning, say so plainly rather than manufacturing a "
-        "concern."
-    )
-    user_prompt = (
-        f"Employee: {signals['name']}\n"
-        f"Data points (days on record): {signals['data_points']}\n"
-        f"Late arrivals: {signals['late_arrivals']}, Early departures: {signals['early_departures']}, "
-        f"Rejected records: {signals['rejected_records']}\n"
-        f"Month-to-date hours: {signals['month_to_date_hours']}, "
-        f"Projected month-end: {signals['projected_month_end_hours']}, "
-        f"Overtime limit: {signals['overtime_limit_hours']} "
-        f"(pace ratio to limit: {signals['pace_ratio_to_limit']})\n\n"
-        f"Anomaly detection (per-employee IsolationForest baseline): {json.dumps(signals['anomaly_detection'])}\n\n"
-        f"Trend drift (early vs recent window average hours): {json.dumps(signals['trend_drift'])}\n"
-    )
-
-    result = await call_llm(system_prompt, user_prompt, max_tokens=300)
-    return {
-        "employee_id": employee_id, "name": signals["name"], "ai_used": result["ok"],
-        "provider": AI_PROVIDER if result["ok"] else None,
-        "model": AI_MODEL if result["ok"] else None,
-        "assessment": result["text"] if result["ok"] else None,
-        "error": result["error"] if not result["ok"] else None,
-        "worth_human_review": signals.get("worth_human_review"),
-        "raw_signals": signals,
-    }
-
-
 @app.get("/api/analytics/site/{site_id}")
 async def site_analytics(site_id: int):
     conn = get_db()
@@ -1159,3 +1137,694 @@ async def get_sites():
         return {"sites": [dict(r) for r in c.fetchall()]}
     finally:
         release_db(conn)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ML ENGINE INIT
+# ─────────────────────────────────────────────────────────────────────────────
+if ML_ENGINE_READY:
+    ml_engine.init(OVERTIME_LIMIT_HOURS)
+    print(f"✅ ml_engine initialised with overtime limit={OVERTIME_LIMIT_HOURS}h")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATTENDANCE POLICY — used by the employee Q&A system prompt
+# ─────────────────────────────────────────────────────────────────────────────
+ATTENDANCE_POLICY = f"""
+AttendTrack Attendance Policy (summary for employee Q&A):
+
+1. CHECK-IN / CHECK-OUT
+   - Each employee must check in once per working day via the Labour Portal.
+   - Face verification is required before every check-in.
+   - Location must be within the geofence of the assigned site.
+   - Check-out closes the session; you cannot check out twice in one day.
+
+2. APPROVAL WORKFLOW
+   - After checkout the record status is "pending_manager".
+   - The site manager reviews and approves or rejects it.
+   - If approved by the manager the record moves to "pending_hr".
+   - HR then gives final approval ("approved") or rejection ("rejected").
+   - Only approved records count toward your monthly total.
+
+3. OVERTIME CAP
+   - The monthly overtime cap is {OVERTIME_LIMIT_HOURS:.0f} hours of total work.
+   - A WhatsApp alert is sent when you approach or exceed the cap.
+   - Exceeding the cap requires a discussion with your manager.
+
+4. STATUS MEANINGS
+   - active: you are currently checked in (session open).
+   - pending_manager: checked out, waiting for manager approval.
+   - pending_hr: manager approved, waiting for HR final approval.
+   - approved: fully approved and counted.
+   - rejected: not counted; contact your manager for clarification.
+
+5. QUESTIONS
+   Employees can ask this assistant about their own records, hours,
+   status meanings, and policy. For disputes, contact your site manager
+   or HR.
+""".strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EMPLOYEE Q&A — POST /api/employee/ask
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/employee/ask")
+async def employee_ask(req: EmployeeAskReq):
+    """
+    Lets a labour employee ask natural-language questions about their own
+    attendance records, status, hours, and policy.  The LLM is given:
+      - the attendance policy as the system prompt
+      - the employee's last 30 attendance records + current month summary
+        as context in the user prompt
+    Answers are stored in employee_qa for audit.
+    """
+    if not req.question or not req.question.strip():
+        raise HTTPException(400, "Question cannot be empty")
+    if len(req.question) > 500:
+        raise HTTPException(400, "Question too long (max 500 characters)")
+
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        # Verify employee exists and is labour
+        c.execute("SELECT name, employee_id FROM users WHERE employee_id=%s AND role='labour'",
+                  (req.employee_id.upper(),))
+        user = c.fetchone()
+        if not user:
+            raise HTTPException(404, "Employee not found or not a labour account")
+
+        # Fetch last 30 records
+        c.execute("""
+            SELECT a.date, a.login_time, a.logout_time, a.hours_worked,
+                   a.status, s.name as site_name
+            FROM attendance a
+            JOIN sites s ON a.site_id = s.id
+            WHERE a.employee_id = %s
+            ORDER BY a.date DESC, a.id DESC
+            LIMIT 30
+        """, (req.employee_id.upper(),))
+        records = c.fetchall()
+
+        # Current month summary
+        as_of = datetime.now()
+        period_start, period_end = _month_bounds(as_of)
+        c.execute("""
+            SELECT COALESCE(SUM(hours_worked), 0) as total,
+                   COUNT(*) as days
+            FROM attendance
+            WHERE employee_id = %s
+              AND date >= %s AND date < %s
+              AND hours_worked IS NOT NULL
+        """, (req.employee_id.upper(), period_start, period_end))
+        month_row = c.fetchone()
+    finally:
+        release_db(conn)
+
+    month_hours = float(month_row["total"])
+    month_days  = int(month_row["days"])
+
+    # Build context string
+    records_text = ""
+    if records:
+        for r in records:
+            lo = str(r["logout_time"])[:16] if r["logout_time"] else "–"
+            li = str(r["login_time"])[:16]  if r["login_time"]  else "–"
+            records_text += (
+                f"  {str(r['date'])[:10]} | In: {li[-5:]}  Out: {lo[-5:]} | "
+                f"{r['hours_worked'] or 0:.1f}h | {r['status']} | {r['site_name']}\n"
+            )
+    else:
+        records_text = "  (no attendance records yet)\n"
+
+    system_prompt = (
+        f"You are an attendance assistant helping a construction-site worker named "
+        f"{user['name']} (ID: {user['employee_id']}) understand their attendance records "
+        f"and company policy.\n\n"
+        f"POLICY:\n{ATTENDANCE_POLICY}\n\n"
+        f"Rules for your answers:\n"
+        f"- Answer only using the data given below and the policy above.\n"
+        f"- Never reveal other employees' data.\n"
+        f"- Be concise (≤ 4 sentences) and friendly.\n"
+        f"- If you cannot answer from the data given, say so honestly."
+    )
+
+    user_prompt = (
+        f"Employee: {user['name']} ({user['employee_id']})\n"
+        f"Current month ({period_start} → {period_end}): "
+        f"{month_hours:.1f}h worked across {month_days} day(s).\n"
+        f"Overtime cap: {OVERTIME_LIMIT_HOURS:.0f}h/month.\n\n"
+        f"Recent attendance records (newest first):\n{records_text}\n"
+        f"Employee question: {req.question.strip()}"
+    )
+
+    result = await call_llm(system_prompt, user_prompt, max_tokens=300)
+
+    answer = result["text"] if result["ok"] else (
+        f"Sorry, I'm unable to process your question right now "
+        f"({result.get('error', 'AI not configured')}). "
+        f"Please contact your manager or HR directly."
+    )
+
+    # Persist Q&A for audit trail
+    conn2 = get_db()
+    try:
+        c2 = conn2.cursor()
+        c2.execute(
+            "INSERT INTO employee_qa (employee_id, question, answer) VALUES (%s, %s, %s)",
+            (req.employee_id.upper(), req.question.strip(), answer)
+        )
+        conn2.commit()
+    except Exception:
+        conn2.rollback()
+    finally:
+        release_db(conn2)
+
+    return {
+        "employee_id": req.employee_id.upper(),
+        "question":    req.question.strip(),
+        "answer":      answer,
+        "ai_used":     result["ok"],
+        "context": {
+            "month_hours": round(month_hours, 1),
+            "month_days":  month_days,
+            "records_shown": len(records),
+        }
+    }
+
+
+@app.get("/api/employee/qa-history/{employee_id}")
+async def employee_qa_history(employee_id: str, limit: int = 20):
+    """Returns the last N Q&A pairs for an employee (self-service audit)."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE employee_id=%s AND role='labour'",
+                  (employee_id.upper(),))
+        if not c.fetchone():
+            raise HTTPException(404, "Employee not found")
+        c.execute("""SELECT question, answer, created_at
+                     FROM employee_qa WHERE employee_id=%s
+                     ORDER BY created_at DESC LIMIT %s""",
+                  (employee_id.upper(), limit))
+        rows = c.fetchall()
+    finally:
+        release_db(conn)
+    return {"employee_id": employee_id.upper(), "history": [dict(r) for r in rows]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ML ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/ml/train/{employee_id}")
+async def ml_train_employee(employee_id: str):
+    """Train (or retrain) ML models for one employee."""
+    if not ML_ENGINE_READY:
+        raise HTTPException(503, "ml_engine not loaded — check server logs")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT employee_id FROM users WHERE employee_id=%s AND role='labour'",
+                  (employee_id.upper(),))
+        if not c.fetchone():
+            raise HTTPException(404, "Labour employee not found")
+        c.execute("""SELECT date, login_time, logout_time, hours_worked, status
+                     FROM attendance WHERE employee_id=%s ORDER BY date ASC""",
+                  (employee_id.upper(),))
+        records = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    import asyncio
+    result = await asyncio.to_thread(ml_engine.train_employee, employee_id.upper(), records)
+    return result
+
+
+@app.post("/api/ml/train-all")
+async def ml_train_all():
+    """Retrain ML models for every labour employee. HR-only in practice — no
+    auth guard added here since the system is already behind a login; add a
+    depends() guard if needed."""
+    if not ML_ENGINE_READY:
+        raise HTTPException(503, "ml_engine not loaded — check server logs")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT employee_id FROM users WHERE role='labour'")
+        employees = [r["employee_id"] for r in c.fetchall()]
+        emp_records: dict = {}
+        for eid in employees:
+            c.execute("""SELECT date, login_time, logout_time, hours_worked, status
+                         FROM attendance WHERE employee_id=%s ORDER BY date ASC""", (eid,))
+            emp_records[eid] = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    import asyncio
+    result = await asyncio.to_thread(ml_engine.retrain_all, emp_records)
+    return result
+
+
+@app.get("/api/ml/predict/{employee_id}")
+async def ml_predict_overtime(employee_id: str):
+    """
+    ML-powered overtime projection for one employee.
+    Uses a trained GradientBoostingRegressor if available,
+    otherwise falls back to linear arithmetic.
+    """
+    if not ML_ENGINE_READY:
+        raise HTTPException(503, "ml_engine not loaded")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name FROM users WHERE employee_id=%s", (employee_id.upper(),))
+        user = c.fetchone()
+        if not user:
+            raise HTTPException(404, "Employee not found")
+        as_of = datetime.now()
+        period_start, period_end = _month_bounds(as_of)
+        c.execute("""SELECT date, hours_worked FROM attendance
+                     WHERE employee_id=%s AND date >= %s AND date < %s
+                       AND hours_worked IS NOT NULL
+                     ORDER BY date ASC""",
+                  (employee_id.upper(), period_start, period_end))
+        month_records = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    import asyncio
+    result = await asyncio.to_thread(
+        ml_engine.predict_overtime, employee_id.upper(), month_records, as_of
+    )
+    result["name"] = user["name"]
+    return result
+
+
+@app.get("/api/ml/anomalies/{employee_id}")
+async def ml_anomalies(employee_id: str, lookback_days: int = 60):
+    """
+    ML anomaly detection for one employee's recent records.
+    Uses IsolationForest if trained, rule-based fallback otherwise.
+    """
+    if not ML_ENGINE_READY:
+        raise HTTPException(503, "ml_engine not loaded")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name FROM users WHERE employee_id=%s", (employee_id.upper(),))
+        user = c.fetchone()
+        if not user:
+            raise HTTPException(404, "Employee not found")
+        c.execute("""SELECT date, login_time, logout_time, hours_worked, status
+                     FROM attendance
+                     WHERE employee_id=%s
+                       AND date >= CURRENT_DATE - INTERVAL '%s days'
+                       AND hours_worked IS NOT NULL
+                     ORDER BY date DESC""",
+                  (employee_id.upper(), lookback_days))
+        records = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    import asyncio
+    result = await asyncio.to_thread(ml_engine.detect_anomalies, employee_id.upper(), records)
+    result["name"] = user["name"]
+    return result
+
+
+@app.get("/api/ml/behaviour/site/{site_id}")
+async def ml_behaviour_site(site_id: int):
+    """Run anomaly detection across all labourers on a site. Used by the
+    behaviour-intelligence tab when ML is available."""
+    if not ML_ENGINE_READY:
+        raise HTTPException(503, "ml_engine not loaded")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT employee_id, name FROM users WHERE site_id=%s AND role='labour'",
+                  (site_id,))
+        labourers = c.fetchall()
+    finally:
+        release_db(conn)
+
+    import asyncio
+    results = []
+    for lab in labourers:
+        conn2 = get_db()
+        try:
+            c2 = conn2.cursor()
+            c2.execute("""SELECT date, login_time, logout_time, hours_worked
+                          FROM attendance WHERE employee_id=%s
+                            AND date >= CURRENT_DATE - INTERVAL '60 days'
+                            AND hours_worked IS NOT NULL
+                          ORDER BY date DESC""", (lab["employee_id"],))
+            recs = [dict(r) for r in c2.fetchall()]
+        finally:
+            release_db(conn2)
+        r = await asyncio.to_thread(ml_engine.detect_anomalies, lab["employee_id"], recs)
+        r["name"] = lab["name"]
+        results.append(r)
+
+    results.sort(key=lambda x: x["risk_score"], reverse=True)
+    return {
+        "site_id": site_id,
+        "employees_analyzed": len(results),
+        "high_risk": sum(1 for r in results if r["risk_label"] == "high"),
+        "results": results,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEDULED REPORTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _run_scheduled_report(schedule_id: int):
+    """
+    Core report runner — fetches the schedule, builds the AI report,
+    delivers it, and writes a run-log entry.
+    """
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM scheduled_reports WHERE id=%s AND enabled=TRUE", (schedule_id,))
+        sched = c.fetchone()
+        if not sched:
+            return
+    finally:
+        release_db(conn)
+
+    sched = dict(sched)
+    report_type = sched["report_type"]
+    site_id     = sched.get("site_id")
+
+    # ── Generate the report text ─────────────────────────────────────────────
+    report_text = None
+    ai_used     = False
+    error_msg   = None
+    status      = "ok"
+
+    try:
+        if report_type == "site_summary" and site_id:
+            payload = await ai_site_summary(site_id)
+            report_text = payload.get("summary") or payload.get("message", "No data")
+            ai_used     = payload.get("ai_used", False)
+
+        elif report_type == "overtime_risk":
+            # Collect all sites or the specified site
+            conn2 = get_db()
+            try:
+                c2 = conn2.cursor()
+                if site_id:
+                    c2.execute("SELECT id, name FROM sites WHERE id=%s", (site_id,))
+                else:
+                    c2.execute("SELECT id, name FROM sites")
+                sites = c2.fetchall()
+            finally:
+                release_db(conn2)
+
+            lines = []
+            for s in sites:
+                analytics = await site_analytics(s["id"])
+                at_risk = [d for d in analytics["details"] if d.get("projected_to_exceed_limit")]
+                lines.append(f"Site: {s['name']}")
+                if at_risk:
+                    for d in at_risk:
+                        lines.append(f"  ⚠️ {d['name']}: {d['month_to_date_hours']}h / projected {d['projected_month_end_hours']}h")
+                else:
+                    lines.append("  ✅ No employees at overtime risk")
+            data_text = "\n".join(lines)
+            system_prompt = (
+                "You are an HR analytics assistant. Based on the overtime risk data below, "
+                "write a brief daily digest (3-5 sentences) for HR management: highlight any "
+                "employees at risk of exceeding their monthly cap, mention sites that are clean, "
+                "and give one actionable recommendation."
+            )
+            result = await call_llm(system_prompt, data_text, max_tokens=400)
+            report_text = result["text"] if result["ok"] else data_text
+            ai_used     = result["ok"]
+
+        elif report_type == "behaviour":
+            conn2 = get_db()
+            try:
+                c2 = conn2.cursor()
+                if site_id:
+                    c2.execute("SELECT employee_id, name FROM users WHERE site_id=%s AND role='labour'", (site_id,))
+                else:
+                    c2.execute("SELECT employee_id, name FROM users WHERE role='labour'")
+                labourers = c2.fetchall()
+            finally:
+                release_db(conn2)
+
+            lines = []
+            for lab in labourers:
+                conn3 = get_db()
+                try:
+                    c3 = conn3.cursor()
+                    c3.execute("""SELECT date, login_time, logout_time, hours_worked
+                                  FROM attendance WHERE employee_id=%s
+                                    AND date >= CURRENT_DATE - INTERVAL '30 days'
+                                    AND hours_worked IS NOT NULL
+                                  ORDER BY date DESC""", (lab["employee_id"],))
+                    recs = [dict(r) for r in c3.fetchall()]
+                finally:
+                    release_db(conn3)
+                if not recs:
+                    continue
+                import asyncio
+                anomaly = await asyncio.to_thread(ml_engine.detect_anomalies, lab["employee_id"], recs) \
+                    if ML_ENGINE_READY else {"risk_label": "unknown", "flags": []}
+                if anomaly.get("risk_label") in ("high", "medium"):
+                    lines.append(f"{lab['name']}: risk={anomaly['risk_label']}, flags={len(anomaly.get('flags', []))}")
+            data_text = "Behaviour flags (last 30 days):\n" + ("\n".join(lines) if lines else "No flags detected.")
+            system_prompt = (
+                "You are an HR analytics assistant. Summarise the behaviour anomaly report below "
+                "in 3-4 sentences for a manager. Focus on employees with high or medium risk and "
+                "suggest one follow-up action."
+            )
+            result = await call_llm(system_prompt, data_text, max_tokens=400)
+            report_text = result["text"] if result["ok"] else data_text
+            ai_used     = result["ok"]
+
+        elif report_type == "full_hr":
+            # Comprehensive: combine site summaries from all sites
+            conn2 = get_db()
+            try:
+                c2 = conn2.cursor()
+                c2.execute("SELECT id, name FROM sites")
+                sites = c2.fetchall()
+            finally:
+                release_db(conn2)
+            lines = []
+            for s in sites:
+                payload = await ai_site_summary(s["id"])
+                lines.append(f"--- {s['name']} ---\n{payload.get('summary') or '(no data)'}")
+            report_text = "\n\n".join(lines)
+            ai_used     = True
+
+        else:
+            status      = "skipped"
+            error_msg   = f"Unknown report_type: {report_type}"
+
+    except Exception as e:
+        status    = "error"
+        error_msg = str(e)
+
+    # ── Deliver ──────────────────────────────────────────────────────────────
+    delivered_to = []
+    if status == "ok" and report_text:
+        recipients = sched.get("recipients") or []
+        if isinstance(recipients, str):
+            try:
+                recipients = json.loads(recipients)
+            except Exception:
+                recipients = []
+
+        if sched["delivery"] == "whatsapp" and recipients:
+            msg = f"📊 AttendTrack Report — {sched['name']}\n\n{report_text[:1400]}"
+            for phone in recipients:
+                r = send_whatsapp_alert(phone, msg)
+                delivered_to.append({"phone": phone, "sent": r.get("sent", False)})
+        else:
+            print(f"[SCHEDULED REPORT] {sched['name']}\n{report_text}", flush=True)
+            delivered_to.append({"channel": "log", "sent": True})
+
+    # ── Write run log ─────────────────────────────────────────────────────────
+    conn3 = get_db()
+    try:
+        c3 = conn3.cursor()
+        c3.execute("""INSERT INTO report_runs
+                      (schedule_id, status, ai_used, report_text, error_msg, delivered_to)
+                      VALUES (%s, %s, %s, %s, %s, %s)""",
+                   (schedule_id, status, ai_used,
+                    report_text, error_msg, json.dumps(delivered_to)))
+        c3.execute("UPDATE scheduled_reports SET last_run_at=NOW() WHERE id=%s", (schedule_id,))
+        conn3.commit()
+    except Exception:
+        conn3.rollback()
+    finally:
+        release_db(conn3)
+
+
+def _cron_kwargs(frequency: str, hour: int) -> dict:
+    """Map frequency string to APScheduler CronTrigger kwargs."""
+    if frequency == "daily":
+        return {"hour": hour, "minute": 0}
+    if frequency == "weekly":
+        return {"day_of_week": "mon", "hour": hour, "minute": 0}
+    if frequency == "monthly":
+        return {"day": 1, "hour": hour, "minute": 0}
+    return {"hour": hour, "minute": 0}
+
+
+def _add_job_to_scheduler(schedule_id: int, frequency: str, hour: int):
+    """Register one schedule with APScheduler (idempotent)."""
+    if not SCHEDULER_READY or not _scheduler:
+        return
+    job_id = f"report_{schedule_id}"
+    # Remove old job if present (handles updates)
+    try:
+        _scheduler.remove_job(job_id)
+    except Exception:
+        pass
+    _scheduler.add_job(
+        _run_scheduled_report,
+        trigger=CronTrigger(**_cron_kwargs(frequency, hour)),
+        args=[schedule_id],
+        id=job_id,
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+
+async def _boot_schedules():
+    """Load all enabled schedules from DB and register them on startup."""
+    if not SCHEDULER_READY:
+        return
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, frequency, hour FROM scheduled_reports WHERE enabled=TRUE")
+        rows = c.fetchall()
+    finally:
+        release_db(conn)
+    for row in rows:
+        _add_job_to_scheduler(row["id"], row["frequency"], row["hour"])
+    print(f"✅ Loaded {len(rows)} scheduled report(s) from DB")
+
+
+# ── REST endpoints for managing schedules ────────────────────────────────────
+
+@app.post("/api/reports/schedule")
+async def create_schedule(req: ScheduleReportReq):
+    """HR creates a new scheduled report."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        # Validate HR
+        c.execute("SELECT id FROM users WHERE employee_id=%s AND role='hr'", (req.created_by.upper(),))
+        if not c.fetchone():
+            raise HTTPException(403, "Only HR can create scheduled reports")
+        if req.report_type not in ("site_summary", "overtime_risk", "behaviour", "full_hr"):
+            raise HTTPException(400, f"Invalid report_type: {req.report_type}")
+        if req.frequency not in ("daily", "weekly", "monthly"):
+            raise HTTPException(400, f"Invalid frequency: {req.frequency}")
+        if not (0 <= req.hour <= 23):
+            raise HTTPException(400, "hour must be 0-23")
+
+        c.execute("""INSERT INTO scheduled_reports
+                     (name, report_type, frequency, hour, site_id, recipients, delivery, created_by)
+                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                  (req.name, req.report_type, req.frequency, req.hour,
+                   req.site_id, json.dumps(req.recipients), req.delivery, req.created_by.upper()))
+        schedule_id = c.fetchone()["id"]
+        conn.commit()
+    except HTTPException:
+        conn.rollback(); raise
+    except Exception as e:
+        conn.rollback(); raise HTTPException(500, str(e))
+    finally:
+        release_db(conn)
+
+    _add_job_to_scheduler(schedule_id, req.frequency, req.hour)
+    return {
+        "success": True,
+        "schedule_id": schedule_id,
+        "message": f"Schedule '{req.name}' created — runs {req.frequency} at {req.hour:02d}:00",
+        "scheduler_active": SCHEDULER_READY,
+    }
+
+
+@app.get("/api/reports/schedules")
+async def list_schedules():
+    """List all scheduled reports (HR dashboard)."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("""SELECT sr.*, s.name as site_name
+                     FROM scheduled_reports sr
+                     LEFT JOIN sites s ON sr.site_id = s.id
+                     ORDER BY sr.created_at DESC""")
+        rows = c.fetchall()
+    finally:
+        release_db(conn)
+    return {"schedules": [dict(r) for r in rows]}
+
+
+@app.delete("/api/reports/schedule/{schedule_id}")
+async def delete_schedule(schedule_id: int, hr_id: str):
+    """Disable a scheduled report (soft-delete via enabled=FALSE)."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE employee_id=%s AND role='hr'", (hr_id.upper(),))
+        if not c.fetchone():
+            raise HTTPException(403, "Only HR can delete schedules")
+        c.execute("UPDATE scheduled_reports SET enabled=FALSE WHERE id=%s RETURNING id",
+                  (schedule_id,))
+        if not c.fetchone():
+            raise HTTPException(404, "Schedule not found")
+        conn.commit()
+    except HTTPException:
+        conn.rollback(); raise
+    except Exception as e:
+        conn.rollback(); raise HTTPException(500, str(e))
+    finally:
+        release_db(conn)
+
+    if SCHEDULER_READY and _scheduler:
+        try:
+            _scheduler.remove_job(f"report_{schedule_id}")
+        except Exception:
+            pass
+    return {"success": True, "message": f"Schedule {schedule_id} disabled"}
+
+
+@app.post("/api/reports/run-now/{schedule_id}")
+async def run_report_now(schedule_id: int):
+    """Manually trigger a scheduled report immediately (for testing/HR use)."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id FROM scheduled_reports WHERE id=%s", (schedule_id,))
+        if not c.fetchone():
+            raise HTTPException(404, "Schedule not found")
+    finally:
+        release_db(conn)
+    # Run in background so the response returns immediately
+    import asyncio
+    asyncio.create_task(_run_scheduled_report(schedule_id))
+    return {"success": True, "message": f"Report {schedule_id} queued — check report_runs table for result"}
+
+
+@app.get("/api/reports/history/{schedule_id}")
+async def report_history(schedule_id: int, limit: int = 10):
+    """Fetch the last N run logs for a schedule."""
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("""SELECT ran_at, status, ai_used, error_msg, delivered_to
+                     FROM report_runs WHERE schedule_id=%s
+                     ORDER BY ran_at DESC LIMIT %s""", (schedule_id, limit))
+        rows = c.fetchall()
+    finally:
+        release_db(conn)
+    return {"schedule_id": schedule_id, "runs": [dict(r) for r in rows]}
