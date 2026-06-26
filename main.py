@@ -82,6 +82,7 @@ def send_whatsapp_alert(to_phone: str, message: str) -> dict:
         return {"sent": False, "reason": str(e)}
 
 app = FastAPI(title="AttendTrack API", version="3.0.0")
+app.mount("/frontend", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")), name="frontend")
 
 # ─────────────────────────────────────────────
 # AI ANALYSIS — real LLM calls (Groq or OpenRouter), OpenAI-compatible API.
@@ -179,6 +180,15 @@ async def manager_portal():
 async def hr_portal():
     p = os.path.join(FRONTEND_DIR, "hr.html")
     return FileResponse(p) if os.path.exists(p) else {"error": "frontend/hr.html not found"}
+
+@app.get("/portal.js")
+async def portal_js():
+    p = os.path.join(FRONTEND_DIR, "portal.js")
+    return FileResponse(p) if os.path.exists(p) else {"error": "frontend/portal.js not found"}
+
+@app.get("/frontend/portal.js")
+async def legacy_portal_js():
+    return await portal_js()
 
 @app.get("/health")
 async def health():
