@@ -239,6 +239,216 @@ function showSrMsg(text, type) {
   el.style.display = 'block';
   el.style.color = type === 'err' ? 'var(--red)' : 'var(--green)';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HR Q&A PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function openHrQaPanel() {
+  document.getElementById('hrQaPanel').style.display = 'block';
+  // populate employee selector
+  fetch(`${API_BASE}/api/employees`)
+    .then(r => r.json())
+    .then(d => {
+      const sel = document.getElementById('qaEmpSelect');
+      const labours = (d.employees || []).filter(e => e.role === 'labour');
+      sel.innerHTML = '<option value="">— All employees —</option>' +
+        labours.map(e => `<option value="${escH(e.employee_id)}">${escH(e.name)} (${escH(e.employee_id)})</option>`).join('');
+    }).catch(() => {});
+}
+function closeHrQaPanel() {
+  document.getElementById('hrQaPanel').style.display = 'none';
+  if (window.switchTab) window.switchTab('overview');
+}
+
+const HR_QA_CHIPS = [
+  ['How many hours has this employee worked this month?', 'Hours this month'],
+  ['Is this employee at risk of exceeding overtime?', 'Overtime risk'],
+  ['Show me all rejected records for this employee', 'Rejected records'],
+  ['Which employees are working the most hours?', 'Top hours (all)'],
+  ['Who has been absent the most this month?', 'Most absent (all)'],
+  ['Summarise attendance patterns across all sites', 'Site summary (all)'],
+  ['Flag any employees showing unusual behaviour', 'Behaviour flags (all)'],
+  ['Which employees have not checked in today?', "Not checked in today"],
+];
+
+document.addEventListener('DOMContentLoaded', () => {
+  const chips = document.getElementById('hrQaChips');
+  if (chips) {
+    chips.innerHTML = HR_QA_CHIPS.map(([q, label]) =>
+      `<span class="chip" onclick="fillHrQa(${JSON.stringify(q)})">${escH(label)}</span>`
+    ).join('');
+  }
+});
+
+function fillHrQa(text) {
+  const inp = document.getElementById('hrQaInput');
+  if (inp) { inp.value = text; inp.focus(); }
+}
+
+async function askHrQuestion() {
+  const hrId    = window._getCurrentUserId ? window._getCurrentUserId() : null;
+  if (!hrId) { alert('Not logged in'); return; }
+  const inp     = document.getElementById('hrQaInput');
+  const question = (inp?.value || '').trim();
+  if (!question) return;
+  const empId   = document.getElementById('qaEmpSelect')?.value || null;
+  const btn     = document.getElementById('hrQaBtn');
+  const ansBox  = document.getElementById('hrQaAnswer');
+  const ansText = document.getElementById('hrQaAnswerText');
+  const ansMeta = document.getElementById('hrQaAnswerMeta');
+
+  btn.disabled = true; btn.textContent = '…';
+  ansBox.style.display = 'block';
+  ansText.textContent  = 'Asking AI — analysing employee data…';
+  ansMeta.textContent  = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/hr/ask`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        hr_id: hrId,
+        question,
+        employee_id: empId || null,
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    ansText.textContent = data.answer;
+    const scope = empId ? `about ${escH(empId)}` : `across ${data.employees_in_context} employee(s)`;
+    ansMeta.textContent = (data.ai_used ? '✨ AI-powered' : '⚠️ AI unavailable') + ` · ${scope}`;
+    inp.value = '';
+  } catch(e) {
+    ansText.textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Ask →';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXCEL DOWNLOAD
+// ═══════════════════════════════════════════════════════════════════════════
+async function downloadExcel() {
+  const period = document.getElementById('xlPeriod').value;
+  const now    = new Date();
+  let url      = `${API_BASE}/api/hr/report/excel?period=${period}&year=${now.getFullYear()}`;
+  if (period === 'monthly') {
+    url += `&month=${now.getMonth() + 1}`;
+  } else {
+    // ISO week
+    const jan4   = new Date(now.getFullYear(), 0, 4);
+    const week   = Math.ceil(((now - jan4) / 86400000 + jan4.getDay() + 1) / 7);
+    url += `&week=${week}`;
+  }
+  const btn = document.getElementById('xlBtn');
+  btn.disabled = true; btn.textContent = '⏳ Building…';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Server error');
+    }
+    const blob = await res.blob();
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    const cd   = res.headers.get('content-disposition') || '';
+    const m    = cd.match(/filename="(.+?)"/);
+    a.download = m ? m[1] : `AttendTrack_report.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  } catch(e) {
+    alert('Download failed: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '⬇ Download Excel';
+  }
+}
+
+// MutationObserver wires hrqa and reports tabs
+const _qaObs = new MutationObserver(() => {
+  const active = document.querySelector('.tab.active');
+  if (!active) return;
+  if (active.dataset.tab === 'hrqa')   openHrQaPanel();
+  if (active.dataset.tab === 'schedreports') openSchedPanel();
+});
+document.addEventListener('DOMContentLoaded', () => {
+  _qaObs.observe(document.querySelector('.tabs') || document.body,
+    { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+});
 </script>
+
+<!-- ══ HR Q&A PANEL ══════════════════════════════════════════════════════════ -->
+<div id="hrQaPanel" style="display:none;position:fixed;inset:0;z-index:400;overflow-y:auto;background:var(--bg);padding-top:4.5rem">
+  <div style="max-width:760px;margin:0 auto;padding:1.5rem">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem">
+      <div>
+        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem">
+          HR <em style="font-style:italic;background:linear-gradient(135deg,var(--purple-mid),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent">Intelligence</em>
+        </div>
+        <div style="font-size:.78rem;color:var(--white-dim);margin-top:.2rem">Ask anything about any employee — the AI reads their live records to answer</div>
+      </div>
+      <button class="btn-sm" onclick="closeHrQaPanel()">✕ Close</button>
+    </div>
+
+    <!-- Excel download card -->
+    <div style="background:var(--bg2);border:1px solid rgba(34,211,238,.25);border-radius:16px;padding:1.1rem;margin-bottom:1.2rem">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.6rem;color:var(--cyan)">📊 Download Excel Report</div>
+      <div style="font-size:.78rem;color:var(--white-dim);margin-bottom:.8rem">
+        5 sheets: Summary · Full Attendance · Overtime · Absent Days · Sick &amp; Short Shifts
+      </div>
+      <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+        <select id="xlPeriod" style="width:auto;margin:0;flex:1;min-width:160px">
+          <option value="monthly">This Month</option>
+          <option value="weekly">This Week</option>
+        </select>
+        <button id="xlBtn" onclick="downloadExcel()"
+          style="background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;
+                 border-radius:100px;padding:.62rem 1.2rem;font-family:'DM Sans',sans-serif;
+                 font-weight:600;font-size:.85rem;cursor:pointer;white-space:nowrap;
+                 box-shadow:0 0 20px var(--cyan-glow)">
+          ⬇ Download Excel
+        </button>
+      </div>
+    </div>
+
+    <!-- Q&A card -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:1.1rem">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.6rem">🤖 Ask the AI</div>
+      <div style="font-size:.78rem;color:var(--white-dim);margin-bottom:.85rem">
+        Select a specific employee to ask about them, or leave blank to ask across all employees.
+      </div>
+
+      <label>Employee (optional)</label>
+      <select id="qaEmpSelect" style="margin-bottom:.75rem">
+        <option value="">— All employees —</option>
+      </select>
+
+      <!-- Quick chips -->
+      <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.75rem" id="hrQaChips"></div>
+
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+        <input id="hrQaInput"
+               placeholder="e.g. How many hours has this employee worked this month?"
+               style="flex:1;margin:0"
+               onkeydown="if(event.key==='Enter') askHrQuestion()">
+        <button id="hrQaBtn" onclick="askHrQuestion()"
+          style="background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border:none;
+                 border-radius:100px;padding:.62rem 1.1rem;font-family:'DM Sans',sans-serif;
+                 font-weight:600;font-size:.82rem;cursor:pointer;white-space:nowrap">
+          Ask →
+        </button>
+      </div>
+
+      <div id="hrQaAnswer" style="display:none;background:rgba(124,58,237,.07);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-top:.5rem">
+        <div style="font-size:.65rem;color:var(--purple-light);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem">AI Answer</div>
+        <div id="hrQaAnswerText" style="font-size:.85rem;line-height:1.65;white-space:pre-wrap"></div>
+        <div id="hrQaAnswerMeta" style="font-size:.65rem;color:var(--white-dim);margin-top:.5rem"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 </body>
 </html>

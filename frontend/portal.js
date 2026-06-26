@@ -61,6 +61,7 @@
         ['overtime', 'Live overtime'],
         ['predict', 'Predictions'],
         ['behaviour', 'Behaviour intelligence'],
+        ['hrqa', '🤖 HR Intelligence'],
         ['schedreports', 'Scheduled reports'],
         ['log', 'Action log'],
       ],
@@ -172,7 +173,11 @@
 
     const tabs = qs('.tabs');
     if (tabs) {
-      tabs.innerHTML = cfg.tabs.map(([key, label]) => `<div class="tab${state.currentTab === key ? ' active' : ''}" data-tab="${key}">${escapeHtml(label)}</div>`).join('');
+      tabs.innerHTML = cfg.tabs.map(([key, label]) => {
+        const badgeId = key === 'pending' ? (portalRole === 'hr' ? 'hrBadge' : 'pendingBadge') : null;
+        const badge   = badgeId ? `<span class="tab-badge" id="${badgeId}" style="display:none">0</span>` : '';
+        return `<div class="tab${state.currentTab === key ? ' active' : ''}" data-tab="${key}">${escapeHtml(label)}${badge}</div>`;
+      }).join('');
       qsa('.tab').forEach((tab) => {
         tab.addEventListener('click', () => switchTab(tab.dataset.tab));
       });
@@ -219,6 +224,8 @@
       setText('statApproved', summary.approved_count ?? '–');
       setText('statTotal', summary.total_labours_site ?? '–');
       setText('pendingBadge', summary.pending_count ?? '0');
+      const pendingBadgeEl = el('pendingBadge');
+      if (pendingBadgeEl) pendingBadgeEl.style.display = (summary.pending_count > 0) ? 'inline-block' : 'none';
       const pageSub = el('pageSub');
       if (pageSub) pageSub.textContent = `${state.currentUser?.site_name || 'Your Site'} · ${state.currentUser?.name || ''}`;
     } else {
@@ -228,6 +235,8 @@
       setText('sApproved', summary.approved_today ?? '–');
       setText('sTotal', summary.total_employees ?? '–');
       setText('hrBadge', summary.pending_hr ?? '0');
+      const hrBadgeEl = el('hrBadge');
+      if (hrBadgeEl) hrBadgeEl.style.display = (summary.pending_hr > 0) ? 'inline-block' : 'none';
       const pageSub = el('pageSub');
       if (pageSub) pageSub.textContent = 'All sites · All employees · Real-time attendance';
     }
@@ -703,6 +712,10 @@
     if (state.currentTab === 'schedreports') {
       // The actual panel is rendered by hr.html's inline script via MutationObserver.
       // Just clear the recList so there's no stale content behind the overlay.
+      setHtml('recList', '');
+    }
+
+    if (state.currentTab === 'hrqa') {
       setHtml('recList', '');
     }
   }
