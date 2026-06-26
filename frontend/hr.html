@@ -37,8 +37,208 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
 </div>
 <nav id="nav" style="display:none"><div class="logo">Attend<em style="font-style:italic">Track</em> · HR</div><div class="nav-right"><span class="nav-badge">HR</span><span class="nav-name" id="navName"></span><button class="btn-sm" onclick="logout()">Logout</button></div></nav>
 <div id="app"><div class="main"><div class="page-title">HR <em>Command Centre</em></div><div class="page-sub">All sites · All employees · Real-time attendance</div><div class="stats-grid"><div class="stat-card"><div class="stat-val" style="color:var(--green)" id="sToday">–</div><div class="stat-lbl">Today's check-ins</div></div><div class="stat-card"><div class="stat-val" style="color:var(--amber)" id="sPendingMgr">–</div><div class="stat-lbl">Pending manager</div></div><div class="stat-card"><div class="stat-val" style="color:var(--red)" id="sPendingHR">–</div><div class="stat-lbl">Pending HR review</div></div><div class="stat-card"><div class="stat-val" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div><div class="stat-card"><div class="stat-val" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div></div><div class="refresh-info"><span class="live-dot"></span>Auto-refreshes every 30s · Last: <span id="lastUpdate">–</span></div><div class="tabs"></div><div id="filterArea" style="display:none" class="filters"><input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()"><input type="text" id="filterEmp" placeholder="Filter by Employee ID" onchange="loadAll()"></div><div id="recList"></div></div></div>
+<!-- ── SCHEDULED REPORTS PANEL ── (shown when "Scheduled reports" tab is active) -->
+<div id="schedReportsPanel" style="display:none;position:fixed;inset:0;z-index:400;overflow-y:auto;background:var(--bg);padding-top:4.5rem">
+  <div style="max-width:700px;margin:0 auto;padding:1.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem">
+      <div>
+        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem">Scheduled <em style="font-style:italic;background:linear-gradient(135deg,var(--purple-mid),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent">Reports</em></div>
+        <div style="font-size:.78rem;color:var(--white-dim);margin-top:.2rem">Create automatic AI reports delivered by WhatsApp or logged to server</div>
+      </div>
+      <button class="btn-sm" onclick="closeSchedPanel()">✕ Close</button>
+    </div>
+
+    <!-- New schedule form -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:1.2rem;margin-bottom:1.2rem">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.9rem">➕ New Schedule</div>
+      <label>Report name</label>
+      <input id="srName" placeholder="e.g. Daily overtime digest">
+      <label>Report type</label>
+      <select id="srType">
+        <option value="overtime_risk">Overtime risk (all sites)</option>
+        <option value="site_summary">Site AI summary (one site)</option>
+        <option value="behaviour">Behaviour intelligence</option>
+        <option value="full_hr">Full HR digest (all sites)</option>
+      </select>
+      <div id="srSiteRow">
+        <label>Site (required for site_summary)</label>
+        <select id="srSite"><option value="">— All sites —</option></select>
+      </div>
+      <label>Frequency</label>
+      <select id="srFreq">
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly (Mondays)</option>
+        <option value="monthly">Monthly (1st of month)</option>
+      </select>
+      <label>Run at hour (0–23, server time)</label>
+      <input id="srHour" type="number" min="0" max="23" value="18" style="max-width:100px">
+      <label>Delivery</label>
+      <select id="srDelivery">
+        <option value="log">Log to server (no WhatsApp needed)</option>
+        <option value="whatsapp">WhatsApp (requires Twilio)</option>
+      </select>
+      <div id="srRecipientsRow" style="display:none">
+        <label>Recipient phone numbers (comma-separated, with country code)</label>
+        <input id="srRecipients" placeholder="e.g. 9876543210, 9876543211">
+      </div>
+      <button class="btn btn-primary" id="srCreateBtn" onclick="createSchedule()" style="margin-top:.4rem">Create schedule →</button>
+      <div id="srMsg" style="font-size:.8rem;margin-top:.5rem;display:none"></div>
+    </div>
+
+    <!-- Existing schedules -->
+    <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.7rem">Existing schedules</div>
+    <div id="srList"><div style="color:var(--white-dim);font-size:.82rem;text-align:center;padding:1.5rem">Loading…</div></div>
+  </div>
+</div>
+
 <button class="ai-fab" id="aiFab" onclick="openAiSheet()" style="display:none"><span class="spark">✨</span> AI Insights</button><div class="ai-backdrop" id="aiBackdrop" onclick="closeAiSheet()"></div><div class="ai-sheet" id="aiSheet"><div class="ai-handle"></div><div class="ai-sheet-head"><div class="ai-sheet-title"><span class="dot"></span> AI Insights</div><button class="ai-sheet-close" onclick="closeAiSheet()">✕</button></div><div class="ai-sheet-body"><div class="ai-sheet-sub">Sends real attendance data to an LLM and asks it to analyze overtime risk and patterns — actual AI reasoning over your data, not a fixed rule.</div><select id="aiSiteSelect" style="margin-bottom:.7rem"><option value="1">Main Construction Site</option><option value="2">Warehouse Zone A</option></select><button class="ai-gen-btn" id="aiGenBtn" onclick="generateAISummary()">✨ Generate report</button><div id="aiResult"></div></div></div>
 <script>window.ATTENDTRACK_PORTAL_ROLE='hr';window.ATTENDTRACK_API=window.ATTENDTRACK_API||'';</script>
 <script src="portal.js"></script>
+<script>
+// ─── SCHEDULED REPORTS PANEL ───────────────────────────────────────────────
+const API_BASE = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
+
+function escH(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// Show the panel when "Scheduled reports" tab becomes active —
+// the tab is added dynamically by portal.js.  We intercept via MutationObserver.
+const _srObs = new MutationObserver(() => {
+  const active = document.querySelector('.tab.active');
+  if (active && active.dataset.tab === 'schedreports') {
+    openSchedPanel();
+  }
+});
+document.addEventListener('DOMContentLoaded', () => {
+  _srObs.observe(document.querySelector('.tabs') || document.body, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] });
+  // Delivery type toggle
+  const dlv = document.getElementById('srDelivery');
+  if (dlv) dlv.addEventListener('change', () => {
+    document.getElementById('srRecipientsRow').style.display = dlv.value === 'whatsapp' ? 'block' : 'none';
+  });
+  // Populate sites
+  fetch(`${API_BASE}/api/sites`).then(r=>r.json()).then(d=>{
+    const sel = document.getElementById('srSite');
+    if (sel) (d.sites||[]).forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.id; o.textContent = s.name;
+      sel.appendChild(o);
+    });
+  }).catch(()=>{});
+});
+
+function openSchedPanel() {
+  document.getElementById('schedReportsPanel').style.display = 'block';
+  loadSchedules();
+}
+function closeSchedPanel() {
+  document.getElementById('schedReportsPanel').style.display = 'none';
+  // Switch back to overview tab
+  if (window.switchTab) window.switchTab('overview');
+}
+
+async function loadSchedules() {
+  const list = document.getElementById('srList');
+  try {
+    const res  = await fetch(`${API_BASE}/api/reports/schedules`);
+    const data = await res.json();
+    const items = (data.schedules || []).filter(s => s.enabled);
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--white-dim);font-size:.82rem;text-align:center;padding:1rem">No schedules yet — create one above.</div>';
+      return;
+    }
+    list.innerHTML = items.map(s => `
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:.9rem;margin-bottom:.6rem">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-family:'Syne',sans-serif;font-weight:700">${escH(s.name)}</div>
+            <div style="font-size:.75rem;color:var(--white-dim);margin:.15rem 0">
+              ${escH(s.report_type)} · ${escH(s.frequency)} @ ${String(s.hour).padStart(2,'0')}:00 ·
+              ${s.site_name ? escH(s.site_name) : 'All sites'} · ${escH(s.delivery)}
+            </div>
+            <div style="font-size:.72rem;color:var(--purple-light)">Last run: ${s.last_run_at ? String(s.last_run_at).slice(0,16) : 'never'}</div>
+          </div>
+          <div style="display:flex;gap:.4rem;flex-shrink:0;margin-left:.5rem">
+            <button style="background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:#22d3ee;border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif"
+              onclick="runNow(${s.id})">▶ Run now</button>
+            <button style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red);border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif"
+              onclick="deleteSchedule(${s.id})">✕</button>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:.82rem">Error: ${escH(e.message)}</div>`;
+  }
+}
+
+async function createSchedule() {
+  const btn  = document.getElementById('srCreateBtn');
+  const msg  = document.getElementById('srMsg');
+  const name = document.getElementById('srName').value.trim();
+  const type = document.getElementById('srType').value;
+  const site = document.getElementById('srSite').value;
+  const freq = document.getElementById('srFreq').value;
+  const hour = parseInt(document.getElementById('srHour').value, 10);
+  const dlv  = document.getElementById('srDelivery').value;
+  const recs = document.getElementById('srRecipients').value
+                 .split(',').map(s=>s.trim()).filter(Boolean);
+
+  if (!name) { showSrMsg('Report name is required', 'err'); return; }
+  if (isNaN(hour) || hour < 0 || hour > 23) { showSrMsg('Hour must be 0–23', 'err'); return; }
+
+  // Get logged-in HR id from portal.js state (exposed via window)
+  const hrId = window._getCurrentUserId ? window._getCurrentUserId() : null;
+  if (!hrId) { showSrMsg('Not logged in', 'err'); return; }
+
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    const res = await fetch(`${API_BASE}/api/reports/schedule`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        name, report_type: type, frequency: freq, hour,
+        site_id: site ? parseInt(site) : null,
+        recipients: recs, delivery: dlv,
+        created_by: hrId
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    showSrMsg(`✅ ${data.message}`, 'ok');
+    document.getElementById('srName').value = '';
+    loadSchedules();
+  } catch(e) {
+    showSrMsg('⚠️ ' + e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create schedule →';
+  }
+}
+
+async function runNow(id) {
+  try {
+    const res  = await fetch(`${API_BASE}/api/reports/run-now/${id}`, {method:'POST'});
+    const data = await res.json();
+    alert(data.message || 'Queued');
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteSchedule(id) {
+  if (!confirm('Disable this schedule?')) return;
+  const hrId = window._getCurrentUserId ? window._getCurrentUserId() : '';
+  try {
+    const res = await fetch(`${API_BASE}/api/reports/schedule/${id}?hr_id=${encodeURIComponent(hrId)}`,
+                            {method:'DELETE'});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    loadSchedules();
+  } catch(e) { alert(e.message); }
+}
+
+function showSrMsg(text, type) {
+  const el = document.getElementById('srMsg');
+  el.textContent = text;
+  el.style.display = 'block';
+  el.style.color = type === 'err' ? 'var(--red)' : 'var(--green)';
+}
+</script>
 </body>
 </html>

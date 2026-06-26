@@ -206,6 +206,52 @@ input:focus{border-color:var(--purple-light)}
     <!-- History -->
     <div class="hist-title">📋 Recent Attendance</div>
     <div id="histList"><div style="color:var(--white-dim);font-size:.8rem;text-align:center;padding:.5rem">Loading…</div></div>
+
+    <div class="divider"></div>
+
+    <!-- ── Q&A ASSISTANT ── -->
+    <div class="hist-title">🤖 Ask the Attendance Assistant</div>
+    <p style="font-size:.78rem;color:var(--white-dim);margin-bottom:.85rem;line-height:1.55">
+      Ask about your hours, status, policy, or any attendance question. The assistant sees your own records only.
+    </p>
+
+    <!-- Quick-question chips -->
+    <div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:.75rem" id="qaChips">
+      <span class="chip" onclick="fillQa('How many hours have I worked this month?')">Hours this month</span>
+      <span class="chip" onclick="fillQa('What does pending_manager mean?')">What is pending_manager?</span>
+      <span class="chip" onclick="fillQa('Am I close to the overtime cap?')">Overtime cap</span>
+      <span class="chip" onclick="fillQa('Why was my record rejected?')">Why rejected?</span>
+      <span class="chip" onclick="fillQa('How does the approval process work?')">Approval process</span>
+    </div>
+
+    <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+      <input id="qaInput"
+             placeholder="Type your question…"
+             style="flex:1;margin:0"
+             onkeydown="if(event.key==='Enter')askQuestion()">
+      <button class="btn btn-primary"
+              id="qaBtn"
+              onclick="askQuestion()"
+              style="width:auto;padding:.62rem 1.1rem;font-size:.82rem;white-space:nowrap">
+        Ask →
+      </button>
+    </div>
+
+    <!-- Answer area -->
+    <div id="qaAnswer" style="display:none;background:rgba(124,58,237,.07);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-top:.5rem">
+      <div style="font-size:.65rem;color:var(--purple-light);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem">Assistant reply</div>
+      <div id="qaAnswerText" style="font-size:.85rem;line-height:1.65;white-space:pre-wrap"></div>
+      <div id="qaAnswerMeta" style="font-size:.65rem;color:var(--white-dim);margin-top:.55rem"></div>
+    </div>
+
+    <!-- Q&A history toggle -->
+    <button class="btn btn-secondary"
+            id="qaHistBtn"
+            onclick="toggleQaHistory()"
+            style="margin-top:.75rem;font-size:.78rem;padding:.45rem .9rem">
+      📜 View past questions
+    </button>
+    <div id="qaHistory" style="display:none;margin-top:.6rem"></div>
   </div>
 </div>
 
@@ -515,6 +561,91 @@ function logout() {
   document.getElementById('empId').value = '';
   document.getElementById('pwd').value = '';
   showScreen('s-login');
+}
+
+// ─── Q&A ASSISTANT ───
+function fillQa(text) {
+  document.getElementById('qaInput').value = text;
+  document.getElementById('qaInput').focus();
+}
+
+async function askQuestion() {
+  if (!currentUser) return;
+  const input = document.getElementById('qaInput');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const btn     = document.getElementById('qaBtn');
+  const ansBox  = document.getElementById('qaAnswer');
+  const ansText = document.getElementById('qaAnswerText');
+  const ansMeta = document.getElementById('qaAnswerMeta');
+
+  btn.disabled = true;
+  btn.textContent = '…';
+  ansBox.style.display = 'block';
+  ansText.textContent = 'Thinking…';
+  ansMeta.textContent = '';
+
+  try {
+    const res = await fetch(`${API}/api/employee/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_id: currentUser.employee_id, question })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+
+    ansText.textContent = data.answer;
+    ansMeta.textContent = data.ai_used
+      ? `✨ AI-powered · ${data.context?.month_hours ?? '?'}h worked this month`
+      : '⚠️ AI unavailable — answer based on policy text only';
+    input.value = '';
+  } catch (e) {
+    ansText.textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Ask →';
+  }
+}
+
+let qaHistoryOpen = false;
+async function toggleQaHistory() {
+  const histDiv = document.getElementById('qaHistory');
+  const btn     = document.getElementById('qaHistBtn');
+  if (qaHistoryOpen) {
+    histDiv.style.display = 'none';
+    btn.textContent = '📜 View past questions';
+    qaHistoryOpen = false;
+    return;
+  }
+  if (!currentUser) return;
+  btn.textContent = 'Loading…';
+  try {
+    const res  = await fetch(`${API}/api/employee/qa-history/${currentUser.employee_id}`);
+    const data = await res.json();
+    const items = data.history || [];
+    if (!items.length) {
+      histDiv.innerHTML = '<div style="color:var(--white-dim);font-size:.8rem;text-align:center;padding:.5rem">No previous questions yet.</div>';
+    } else {
+      histDiv.innerHTML = items.map(item => `
+        <div class="hist-row">
+          <div style="font-weight:600;color:var(--purple-light);margin-bottom:.3rem">Q: ${escHtml(item.question)}</div>
+          <div style="font-size:.8rem;line-height:1.55;white-space:pre-wrap">${escHtml(item.answer)}</div>
+          <div style="font-size:.65rem;color:var(--white-dim);margin-top:.3rem">${String(item.created_at || '').slice(0,16)}</div>
+        </div>`).join('');
+    }
+    histDiv.style.display = 'block';
+    btn.textContent = '📜 Hide past questions';
+    qaHistoryOpen = true;
+  } catch (e) {
+    btn.textContent = '📜 View past questions';
+  }
+}
+
+function escHtml(v) {
+  return String(v ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 </script>
 </body>

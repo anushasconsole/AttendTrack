@@ -61,6 +61,7 @@
         ['overtime', 'Live overtime'],
         ['predict', 'Predictions'],
         ['behaviour', 'Behaviour intelligence'],
+        ['schedreports', 'Scheduled reports'],
         ['log', 'Action log'],
       ],
     },
@@ -698,6 +699,12 @@
       if (!state.allRecords.length) await loadAllRecords();
       renderLog(state.allRecords);
     }
+
+    if (state.currentTab === 'schedreports') {
+      // The actual panel is rendered by hr.html's inline script via MutationObserver.
+      // Just clear the recList so there's no stale content behind the overlay.
+      setHtml('recList', '');
+    }
   }
 
   async function loadAll() {
@@ -881,6 +888,8 @@
     window.closeAiSheet = closeAiSheet;
     window.generateAISummary = generateAISummary;
     window.loadAll = loadAll;
+    // Expose current user id for inline scripts (HR scheduled reports panel)
+    window._getCurrentUserId = () => state.currentUser?.employee_id || null;
   }
 
   function wireUi() {
