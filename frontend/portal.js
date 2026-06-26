@@ -183,15 +183,15 @@
     }
   }
 
-  function applyRoleVisibility(visible) {
+  function applyRoleVisibility(showDashboard) {
     const loginView = el('loginView');
     const nav = el('nav');
     const app = el('app');
     const fab = el('aiFab');
-    if (loginView) loginView.style.display = visible ? 'flex' : 'none';
-    if (nav) nav.style.display = visible ? 'flex' : 'none';
-    if (app) app.style.display = visible ? 'block' : 'none';
-    if (fab) fab.style.display = visible ? 'flex' : 'none';
+    if (loginView) loginView.style.display = showDashboard ? 'none' : 'flex';
+    if (nav) nav.style.display = showDashboard ? 'flex' : 'none';
+    if (app) app.style.display = showDashboard ? 'block' : 'none';
+    if (fab) fab.style.display = showDashboard ? 'flex' : 'none';
   }
 
   function startRefresh() {
@@ -773,7 +773,7 @@
         throw new Error(cfg.loginRole === 'manager' ? 'This portal is for Site Managers only.' : 'This portal is for HR only.');
       }
       state.currentUser = payload.user;
-      applyRoleVisibility(false);
+      applyRoleVisibility(true);
       setText('navName', state.currentUser.name);
       const navBadge = qs('.nav-badge');
       if (navBadge) navBadge.textContent = cfg.badge;
@@ -803,7 +803,7 @@
     state.allRecords = [];
     state.pendingRecords = [];
     state.sessionLog = [];
-    applyRoleVisibility(true);
+    applyRoleVisibility(false);
     if (el('aiFab')) el('aiFab').style.display = 'none';
     if (el('loginMsg')) {
       el('loginMsg').className = 'msg';
@@ -916,7 +916,7 @@
     wireGlobals();
     ensureShell();
     wireUi();
-    applyRoleVisibility(true);
+    applyRoleVisibility(false);
     if (portalRole === 'hr') {
       const filterArea = el('filterArea');
       if (filterArea) {
