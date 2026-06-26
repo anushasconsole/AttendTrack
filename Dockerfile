@@ -34,12 +34,13 @@ RUN pip install --no-cache-dir \
 # doesn't bust the cache for the slow dlib/face_recognition layers above
 RUN pip install --no-cache-dir twilio==9.0.4
 
-# New intelligence layer — ML + scheduler
+# New intelligence layer — ML + scheduler + Excel reports
 RUN pip install --no-cache-dir \
     apscheduler==3.10.4 \
     scikit-learn==1.4.2 \
     joblib==1.4.2 \
-    pandas==2.2.2
+    pandas==2.2.2 \
+    openpyxl==3.1.2
 
 COPY . .
 

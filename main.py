@@ -344,6 +344,15 @@ def init_db():
             error_msg    TEXT,
             delivered_to JSONB DEFAULT '[]'
         )""")
+        # ── New: HR Q&A audit log ───────────────────────────────────────────
+        c.execute("""CREATE TABLE IF NOT EXISTS hr_qa (
+            id                  SERIAL PRIMARY KEY,
+            hr_id               TEXT NOT NULL REFERENCES users(employee_id),
+            question            TEXT NOT NULL,
+            about_employee_id   TEXT,
+            answer              TEXT NOT NULL,
+            created_at          TIMESTAMP DEFAULT NOW()
+        )""")
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_att_emp_date  ON attendance(employee_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_site_date ON attendance(site_id, date DESC)",
@@ -352,6 +361,7 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_ot_emp_period ON overtime_alerts(employee_id, period_start)",
             "CREATE INDEX IF NOT EXISTS idx_qa_emp        ON employee_qa(employee_id, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_rpt_runs      ON report_runs(schedule_id, ran_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_hr_qa         ON hr_qa(hr_id, created_at DESC)",
         ]:
             c.execute(idx)
         conn.commit()
@@ -1828,3 +1838,453 @@ async def report_history(schedule_id: int, limit: int = 10):
     finally:
         release_db(conn)
     return {"schedule_id": schedule_id, "runs": [dict(r) for r in rows]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HR Q&A — POST /api/hr/ask
+# HR can ask anything about any labour employee. The LLM receives the full
+# employee profile + last 60 days of attendance as context.
+# ─────────────────────────────────────────────────────────────────────────────
+class HRAskReq(BaseModel):
+    hr_id:      str
+    question:   str
+    employee_id: Optional[str] = None   # None = ask about all employees
+
+@app.post("/api/hr/ask")
+async def hr_ask(req: HRAskReq):
+    if not req.question or not req.question.strip():
+        raise HTTPException(400, "Question cannot be empty")
+    if len(req.question) > 800:
+        raise HTTPException(400, "Question too long (max 800 characters)")
+
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        # Verify HR role
+        c.execute("SELECT name FROM users WHERE employee_id=%s AND role='hr'",
+                  (req.hr_id.upper(),))
+        if not c.fetchone():
+            raise HTTPException(403, "Not an HR account")
+
+        if req.employee_id:
+            # Single employee context
+            eid = req.employee_id.upper()
+            c.execute("""SELECT u.employee_id, u.name, u.phone, u.department,
+                                u.face_registered, s.name as site_name
+                         FROM users u LEFT JOIN sites s ON u.site_id=s.id
+                         WHERE u.employee_id=%s AND u.role='labour'""", (eid,))
+            emp = c.fetchone()
+            if not emp:
+                raise HTTPException(404, f"Labour employee {eid} not found")
+            employees = [dict(emp)]
+
+            c.execute("""SELECT a.date, a.login_time, a.logout_time, a.hours_worked,
+                                a.status, a.manager_note, a.hr_note, s.name as site_name
+                         FROM attendance a JOIN sites s ON a.site_id=s.id
+                         WHERE a.employee_id=%s
+                         ORDER BY a.date DESC LIMIT 60""", (eid,))
+            records_map = {eid: [dict(r) for r in c.fetchall()]}
+
+            as_of = datetime.now()
+            ps, pe = _month_bounds(as_of)
+            c.execute("""SELECT COALESCE(SUM(hours_worked),0) as mh,
+                                COUNT(*) as md
+                         FROM attendance
+                         WHERE employee_id=%s AND date>=%s AND date<%s
+                           AND hours_worked IS NOT NULL""", (eid, ps, pe))
+            mrow = c.fetchone()
+            month_summary = {eid: {"hours": float(mrow["mh"]), "days": int(mrow["md"])}}
+        else:
+            # All labour employees
+            c.execute("""SELECT u.employee_id, u.name, u.phone, u.department,
+                                u.face_registered, s.name as site_name
+                         FROM users u LEFT JOIN sites s ON u.site_id=s.id
+                         WHERE u.role='labour' ORDER BY u.name""")
+            employees = [dict(r) for r in c.fetchall()]
+
+            as_of = datetime.now()
+            ps, pe = _month_bounds(as_of)
+            c.execute("""SELECT employee_id,
+                                COALESCE(SUM(hours_worked),0) as mh,
+                                COUNT(*) as md
+                         FROM attendance
+                         WHERE date>=%s AND date<%s AND hours_worked IS NOT NULL
+                         GROUP BY employee_id""", (ps, pe))
+            month_summary = {r["employee_id"]: {"hours": float(r["mh"]),
+                                                "days": int(r["md"])}
+                             for r in c.fetchall()}
+
+            # Last 30 records per employee (capped at 20 employees for token budget)
+            records_map = {}
+            for emp in employees[:20]:
+                eid = emp["employee_id"]
+                c.execute("""SELECT a.date, a.login_time, a.logout_time,
+                                    a.hours_worked, a.status, s.name as site_name
+                             FROM attendance a JOIN sites s ON a.site_id=s.id
+                             WHERE a.employee_id=%s
+                             ORDER BY a.date DESC LIMIT 30""", (eid,))
+                records_map[eid] = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    # Build context text
+    context_lines = []
+    for emp in employees:
+        eid   = emp["employee_id"]
+        ms    = month_summary.get(eid, {"hours": 0, "days": 0})
+        recs  = records_map.get(eid, [])
+        ot_flag = "⚠️ OVERTIME RISK" if ms["hours"] >= OVERTIME_LIMIT_HOURS * 0.85 else ""
+        context_lines.append(
+            f"\n[{eid}] {emp['name']} | {emp['department'] or 'Labour'} | "
+            f"Site: {emp['site_name'] or 'unassigned'} | Phone: {emp['phone'] or '–'} "
+            f"| Face enrolled: {'yes' if emp['face_registered'] else 'no'} {ot_flag}"
+        )
+        context_lines.append(
+            f"  This month: {ms['hours']:.1f}h across {ms['days']} day(s) "
+            f"(cap: {OVERTIME_LIMIT_HOURS:.0f}h)"
+        )
+        if recs:
+            context_lines.append("  Recent records (newest first):")
+            for r in recs[:10]:
+                lo = str(r["logout_time"])[:16] if r["logout_time"] else "–"
+                li = str(r["login_time"])[:16]  if r["login_time"]  else "–"
+                context_lines.append(
+                    f"    {str(r['date'])[:10]} | In:{li[-5:]} Out:{lo[-5:]} "
+                    f"| {r['hours_worked'] or 0:.1f}h | {r['status']}"
+                )
+
+    system_prompt = (
+        "You are an HR intelligence assistant for a construction-site workforce management system. "
+        "You have access to real employee profiles and attendance records. "
+        "Answer the HR officer's question precisely and factually using only the data provided. "
+        "If asked about a specific employee, focus only on them. "
+        "If asked about patterns or summaries across all employees, aggregate the data logically. "
+        "Be concise (max 6 sentences or a short table) and flag any anomalies or risks proactively. "
+        f"Overtime cap is {OVERTIME_LIMIT_HOURS:.0f} hours/month."
+    )
+    user_prompt = (
+        f"HR Question: {req.question.strip()}\n\n"
+        f"Employee data ({len(employees)} employee(s)):\n"
+        + "\n".join(context_lines)
+    )
+
+    result = await call_llm(system_prompt, user_prompt, max_tokens=500)
+    answer = result["text"] if result["ok"] else (
+        f"AI unavailable ({result.get('error','not configured')}). "
+        f"Please review the data manually."
+    )
+
+    # Save to hr_qa audit table (create if not exists — handled in init_db extension below)
+    conn2 = get_db()
+    try:
+        c2 = conn2.cursor()
+        c2.execute("""INSERT INTO hr_qa (hr_id, question, about_employee_id, answer)
+                      VALUES (%s,%s,%s,%s)
+                      ON CONFLICT DO NOTHING""",
+                   (req.hr_id.upper(), req.question.strip(),
+                    req.employee_id.upper() if req.employee_id else None, answer))
+        conn2.commit()
+    except Exception:
+        conn2.rollback()
+    finally:
+        release_db(conn2)
+
+    return {
+        "hr_id":        req.hr_id.upper(),
+        "question":     req.question.strip(),
+        "about":        req.employee_id.upper() if req.employee_id else "all employees",
+        "answer":       answer,
+        "ai_used":      result["ok"],
+        "employees_in_context": len(employees),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCEL REPORT — GET /api/hr/report/excel
+# Generates a downloadable .xlsx with 5 sheets:
+#   1. Summary         — site-level totals
+#   2. Attendance Sheet — every record in the period (full detail)
+#   3. Overtime        — employees at/near cap
+#   4. Absent Days     — days with no attendance record
+#   5. Sick / Leave    — records with very short hours (proxy for sick leave)
+# ─────────────────────────────────────────────────────────────────────────────
+from fastapi.responses import StreamingResponse
+
+@app.get("/api/hr/report/excel")
+async def hr_excel_report(
+    period: str = "monthly",          # "monthly" or "weekly"
+    year:   int = None,
+    month:  int = None,
+    week:   int = None,               # ISO week number (used when period=weekly)
+    hr_id:  str = "HR001",
+):
+    """
+    Builds and streams an Excel workbook for the requested period.
+    No extra library needed beyond openpyxl (added to requirements).
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side)
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(503, "openpyxl not installed — add openpyxl==3.1.2 to requirements.txt")
+
+    now = datetime.now()
+    yr  = year  or now.year
+    mo  = month or now.month
+
+    # Compute date range
+    if period == "weekly":
+        import datetime as dt_mod
+        wk = week or now.isocalendar()[1]
+        # Monday of that ISO week
+        d_start = dt_mod.date.fromisocalendar(yr, wk, 1)
+        d_end   = d_start + __import__('datetime').timedelta(days=7)
+        period_label = f"Week {wk}, {yr}"
+    else:
+        import datetime as dt_mod
+        d_start = dt_mod.date(yr, mo, 1)
+        if mo == 12:
+            d_end = dt_mod.date(yr + 1, 1, 1)
+        else:
+            d_end = dt_mod.date(yr, mo + 1, 1)
+        period_label = f"{dt_mod.date(yr, mo, 1).strftime('%B %Y')}"
+
+    conn = get_db()
+    try:
+        c = conn.cursor()
+
+        # All labour employees
+        c.execute("""SELECT u.employee_id, u.name, u.phone, u.department,
+                            s.name as site_name, s.id as site_id
+                     FROM users u LEFT JOIN sites s ON u.site_id=s.id
+                     WHERE u.role='labour' ORDER BY s.name, u.name""")
+        employees = [dict(r) for r in c.fetchall()]
+
+        # All attendance in range
+        c.execute("""SELECT a.*, u.name as emp_name, u.department,
+                            s.name as site_name
+                     FROM attendance a
+                     JOIN users u ON a.employee_id=u.employee_id
+                     JOIN sites s ON a.site_id=s.id
+                     WHERE a.date>=%s AND a.date<%s
+                     ORDER BY s.name, u.name, a.date""",
+                  (d_start, d_end))
+        att_rows = [dict(r) for r in c.fetchall()]
+
+        # Sites
+        c.execute("SELECT id, name FROM sites ORDER BY id")
+        sites = [dict(r) for r in c.fetchall()]
+    finally:
+        release_db(conn)
+
+    # ── Helper styles ─────────────────────────────────────────────────────────
+    HDR_FILL   = PatternFill("solid", fgColor="3B0764")   # deep purple
+    HDR_FONT   = Font(bold=True, color="FFFFFF", size=10)
+    TITLE_FONT = Font(bold=True, color="C084FC", size=13)
+    SUB_FONT   = Font(color="9B59F5", size=9)
+    OT_FILL    = PatternFill("solid", fgColor="7F1D1D")   # dark red
+    OK_FILL    = PatternFill("solid", fgColor="14532D")   # dark green
+    WARN_FILL  = PatternFill("solid", fgColor="713F12")   # dark amber
+    ALT_FILL   = PatternFill("solid", fgColor="0D0820")
+    THIN       = Border(
+        left=Side(style='thin', color='3B0764'),
+        right=Side(style='thin', color='3B0764'),
+        top=Side(style='thin', color='3B0764'),
+        bottom=Side(style='thin', color='3B0764'),
+    )
+
+    def hdr(ws, row, cols):
+        for c_idx, val in enumerate(cols, 1):
+            cell = ws.cell(row=row, column=c_idx, value=val)
+            cell.fill = HDR_FILL
+            cell.font = HDR_FONT
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = THIN
+
+    def data_cell(ws, row, col, val, fill=None):
+        cell = ws.cell(row=row, column=col, value=val)
+        cell.border = THIN
+        cell.alignment = Alignment(vertical='center', wrap_text=False)
+        if fill:
+            cell.fill = fill
+        return cell
+
+    def auto_width(ws, min_w=10, max_w=40):
+        for col_cells in ws.columns:
+            length = max((len(str(c.value or '')) for c in col_cells), default=min_w)
+            ws.column_dimensions[get_column_letter(col_cells[0].column)].width = \
+                min(max_w, max(min_w, length + 2))
+
+    def title_row(ws, text, sub):
+        ws['A1'] = text
+        ws['A1'].font = TITLE_FONT
+        ws['A2'] = sub
+        ws['A2'].font = SUB_FONT
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)   # remove default sheet
+
+    # ─── Sheet 1: Summary ────────────────────────────────────────────────────
+    ws1 = wb.create_sheet("Summary")
+    title_row(ws1, f"AttendTrack — {period_label} Summary", f"Generated {now.strftime('%Y-%m-%d %H:%M')}")
+
+    emp_att_map = {}   # employee_id → list of records
+    for r in att_rows:
+        emp_att_map.setdefault(r["employee_id"], []).append(r)
+
+    site_stats = {}
+    for emp in employees:
+        sid  = emp["site_id"]
+        sn   = emp["site_name"] or "Unassigned"
+        recs = emp_att_map.get(emp["employee_id"], [])
+        mh   = sum(float(r["hours_worked"] or 0) for r in recs)
+        if sid not in site_stats:
+            site_stats[sid] = {"name": sn, "total_emp": 0, "present": 0,
+                               "absent": 0, "total_hours": 0.0, "ot_workers": 0}
+        site_stats[sid]["total_emp"]   += 1
+        site_stats[sid]["total_hours"] += mh
+        if recs:
+            site_stats[sid]["present"] += 1
+        else:
+            site_stats[sid]["absent"]  += 1
+        if mh >= OVERTIME_LIMIT_HOURS:
+            site_stats[sid]["ot_workers"] += 1
+
+    hdr(ws1, 4, ["Site", "Total Workers", "Present (period)",
+                 "Absent (no records)", "Total Hours Worked",
+                 "Avg Hours/Worker", "Overtime Workers"])
+    r_idx = 5
+    for sid, st in site_stats.items():
+        avg = round(st["total_hours"] / max(1, st["present"]), 1)
+        data_cell(ws1, r_idx, 1, st["name"])
+        data_cell(ws1, r_idx, 2, st["total_emp"])
+        data_cell(ws1, r_idx, 3, st["present"])
+        data_cell(ws1, r_idx, 4, st["absent"])
+        data_cell(ws1, r_idx, 5, round(st["total_hours"], 1))
+        data_cell(ws1, r_idx, 6, avg)
+        fill = OT_FILL if st["ot_workers"] > 0 else OK_FILL
+        data_cell(ws1, r_idx, 7, st["ot_workers"], fill)
+        r_idx += 1
+
+    # Totals row
+    total_emp   = len(employees)
+    total_pres  = sum(1 for e in employees if emp_att_map.get(e["employee_id"]))
+    total_abs   = total_emp - total_pres
+    total_hours = sum(float(r["hours_worked"] or 0) for r in att_rows)
+    total_ot    = sum(1 for st in site_stats.values() for _ in range(st["ot_workers"]))
+    for ci, val in enumerate(["TOTAL", total_emp, total_pres, total_abs,
+                               round(total_hours,1), "–", total_ot], 1):
+        cell = ws1.cell(row=r_idx, column=ci, value=val)
+        cell.font = Font(bold=True, color="C084FC")
+        cell.border = THIN
+    auto_width(ws1)
+
+    # ─── Sheet 2: Attendance Sheet ────────────────────────────────────────────
+    ws2 = wb.create_sheet("Attendance Sheet")
+    title_row(ws2, f"Full Attendance — {period_label}", "All records in period")
+    cols2 = ["Employee ID", "Name", "Department", "Site",
+             "Date", "Check-In", "Check-Out", "Hours Worked",
+             "Status", "Manager Note", "HR Note"]
+    hdr(ws2, 4, cols2)
+    for ri, r in enumerate(att_rows, 5):
+        li = str(r["login_time"])[:16]  if r["login_time"]  else "–"
+        lo = str(r["logout_time"])[:16] if r["logout_time"] else "–"
+        hw = round(float(r["hours_worked"] or 0), 2)
+        st = r["status"]
+        fill = (OT_FILL  if hw > OVERTIME_LIMIT_HOURS else
+                WARN_FILL if st in ("rejected",) else
+                OK_FILL   if st == "approved" else None)
+        for ci, val in enumerate([
+            r["employee_id"], r["emp_name"], r["department"] or "–",
+            r["site_name"], str(r["date"])[:10], li, lo,
+            hw, st, r.get("manager_note") or "–", r.get("hr_note") or "–"
+        ], 1):
+            data_cell(ws2, ri, ci, val, fill if ci == 8 else None)
+    auto_width(ws2)
+
+    # ─── Sheet 3: Overtime ────────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Overtime")
+    title_row(ws3, f"Overtime Report — {period_label}",
+              f"Cap: {OVERTIME_LIMIT_HOURS:.0f}h/month")
+    hdr(ws3, 4, ["Employee ID", "Name", "Site", "Department",
+                 "Hours This Period", "Cap", "Over By (h)", "Risk Level"])
+    ri = 5
+    for emp in employees:
+        recs = emp_att_map.get(emp["employee_id"], [])
+        mh   = sum(float(r["hours_worked"] or 0) for r in recs)
+        if mh < OVERTIME_LIMIT_HOURS * 0.8:
+            continue
+        over = round(mh - OVERTIME_LIMIT_HOURS, 1)
+        risk = "Exceeded" if mh >= OVERTIME_LIMIT_HOURS else "Warning"
+        fill = OT_FILL if risk == "Exceeded" else WARN_FILL
+        for ci, val in enumerate([emp["employee_id"], emp["name"],
+                                   emp["site_name"] or "–", emp["department"] or "–",
+                                   round(mh,1), OVERTIME_LIMIT_HOURS,
+                                   over if over > 0 else "–", risk], 1):
+            data_cell(ws3, ri, ci, val, fill if ci >= 5 else None)
+        ri += 1
+    if ri == 5:
+        ws3.cell(row=5, column=1, value="No employees at or near overtime cap in this period.")
+    auto_width(ws3)
+
+    # ─── Sheet 4: Absent Days ─────────────────────────────────────────────────
+    ws4 = wb.create_sheet("Absent Days")
+    title_row(ws4, f"Absent Days — {period_label}", "Working days with no attendance record")
+    hdr(ws4, 4, ["Employee ID", "Name", "Site", "Absent Dates (no record)"])
+
+    import datetime as dt_mod
+    all_dates = []
+    cur = d_start
+    while cur < d_end:
+        if cur.weekday() < 6:   # Mon–Sat (construction sites often work Saturdays)
+            all_dates.append(cur)
+        cur += dt_mod.timedelta(days=1)
+
+    ri = 5
+    for emp in employees:
+        recs_dates = {str(r["date"])[:10] for r in emp_att_map.get(emp["employee_id"], [])}
+        absent = [str(d) for d in all_dates if str(d) not in recs_dates]
+        if not absent:
+            continue
+        data_cell(ws4, ri, 1, emp["employee_id"])
+        data_cell(ws4, ri, 2, emp["name"])
+        data_cell(ws4, ri, 3, emp["site_name"] or "–")
+        data_cell(ws4, ri, 4, ", ".join(absent))
+        ri += 1
+    if ri == 5:
+        ws4.cell(row=5, column=1, value="No absent days recorded for this period.")
+    auto_width(ws4)
+
+    # ─── Sheet 5: Short Shifts / Sick Leave ───────────────────────────────────
+    ws5 = wb.create_sheet("Sick & Short Shifts")
+    title_row(ws5, f"Short Shifts & Sick Leave — {period_label}",
+              "Records with < 4 hours worked (possible sick leave or early departure)")
+    hdr(ws5, 4, ["Employee ID", "Name", "Site", "Date",
+                 "Hours Worked", "Status", "Note"])
+    ri = 5
+    for r in att_rows:
+        hw = float(r["hours_worked"] or 0)
+        if hw >= 4:
+            continue
+        note = r.get("manager_note") or r.get("hr_note") or "–"
+        for ci, val in enumerate([
+            r["employee_id"], r["emp_name"], r["site_name"],
+            str(r["date"])[:10], round(hw, 2), r["status"], note
+        ], 1):
+            data_cell(ws5, ri, ci, val, WARN_FILL if hw < 2 else None)
+        ri += 1
+    if ri == 5:
+        ws5.cell(row=5, column=1, value="No short shifts in this period.")
+    auto_width(ws5)
+
+    # ── Stream back as download ───────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"AttendTrack_{period_label.replace(' ','_').replace(',','')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'}
+    )
