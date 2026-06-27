@@ -61,7 +61,6 @@
         ['overtime', 'Live overtime'],
         ['predict', 'Predictions'],
         ['behaviour', 'Behaviour intelligence'],
-        ['hrqa', '🤖 HR Intelligence'],
         ['schedreports', 'Scheduled reports'],
         ['log', 'Action log'],
       ],
@@ -712,10 +711,6 @@
     if (state.currentTab === 'schedreports') {
       // The actual panel is rendered by hr.html's inline script via MutationObserver.
       // Just clear the recList so there's no stale content behind the overlay.
-      setHtml('recList', '');
-    }
-
-    if (state.currentTab === 'hrqa') {
       setHtml('recList', '');
     }
   }

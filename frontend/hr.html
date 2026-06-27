@@ -19,11 +19,22 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
 .tabs{display:flex;gap:.4rem;margin-bottom:1.2rem;border-bottom:1px solid var(--border);padding-bottom:.5rem;overflow-x:auto}.tab{padding:.4rem .9rem;border-radius:100px;font-size:.8rem;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;border:1px solid transparent;white-space:nowrap}.tab.active{background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border-color:transparent}.tab:not(.active){color:var(--white-dim);background:var(--white-faint);border-color:var(--border)}.tab:not(.active):hover{border-color:var(--purple-light);color:var(--purple-light)}.tab-badge{display:inline-block;background:var(--red);color:#fff;border-radius:100px;font-size:.6rem;padding:.1rem .35rem;margin-left:.3rem;font-weight:700}
 .rec-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-bottom:.65rem}.rec-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.5rem}.rec-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1rem}.rec-meta{font-size:.75rem;color:var(--white-dim);margin-top:.1rem}.badge{display:inline-block;font-size:.65rem;padding:.18rem .55rem;border-radius:100px;font-weight:600}.b-pending{background:rgba(245,158,11,.15);color:var(--amber);border:1px solid rgba(245,158,11,.3)}.b-approved{background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3)}.b-rejected{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}.b-active{background:rgba(74,222,128,.15);color:var(--green);border:1px solid rgba(74,222,128,.3)}.rec-times{font-size:.78rem;color:var(--white-dim);margin:.35rem 0}.rec-actions{display:flex;gap:.5rem;margin-top:.6rem}.rec-actions input{font-size:.78rem;padding:.4rem .7rem;margin:0;flex:1}.btn-approve{background:rgba(74,222,128,.15);color:var(--green);border:1px solid rgba(74,222,128,.4);border-radius:100px;padding:.38rem .9rem;font-size:.75rem;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s}.btn-approve:hover{background:rgba(74,222,128,.3)}.btn-reject{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.3);border-radius:100px;padding:.38rem .9rem;font-size:.75rem;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s}.btn-reject:hover{background:rgba(239,68,68,.2)}.empty{color:var(--white-dim);font-size:.82rem;text-align:center;padding:2rem 0;background:var(--bg2);border:1px solid var(--border);border-radius:14px}
 .filters{display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}.filters input,.filters select{flex:1;min-width:140px;margin:0}.live-dot{width:8px;height:8px;background:var(--green);border-radius:50%;display:inline-block;animation:pulse 2s infinite;margin-right:.35rem}@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.4)}50%{box-shadow:0 0 0 5px rgba(74,222,128,0)}}.refresh-info{font-size:.72rem;color:var(--white-dim);text-align:right;margin-bottom:.75rem}.emp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.65rem}.emp-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:.85rem}.emp-name{font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem}.emp-id{font-size:.72rem;color:var(--purple-light);margin:.1rem 0}.emp-meta{font-size:.75rem;color:var(--white-dim)}.face-tag{font-size:.65rem;padding:.15rem .5rem;border-radius:100px;font-weight:600;margin-top:.35rem;display:inline-block}.face-yes{background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.3)}.face-no{background:rgba(245,158,11,.1);color:var(--amber);border:1px solid rgba(245,158,11,.3)}
-.ai-fab{position:fixed;bottom:1.4rem;right:1.4rem;z-index:200;display:flex;align-items:center;gap:.5rem;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;padding:.7rem 1.1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;box-shadow:0 4px 24px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4);transition:transform .25s,box-shadow .25s}.ai-fab:hover{transform:translateY(-3px);box-shadow:0 8px 30px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4)}.ai-fab:active{transform:translateY(-1px) scale(.97)}.ai-fab .spark{font-size:1rem;animation:sparkle 2.2s ease-in-out infinite}@keyframes sparkle{0%,100%{transform:scale(1) rotate(0deg)}50%{transform:scale(1.15) rotate(12deg)}}.ai-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:300;opacity:0;pointer-events:none;transition:opacity .3s}.ai-backdrop.open{opacity:1;pointer-events:auto}.ai-sheet{position:fixed;left:0;right:0;bottom:0;z-index:301;max-width:760px;margin:0 auto;background:linear-gradient(170deg,var(--bg2),#0a0518);border:1px solid var(--border);border-bottom:none;border-radius:24px 24px 0 0;box-shadow:0 -10px 50px rgba(0,0,0,.6);transform:translateY(105%);transition:transform .4s cubic-bezier(.16,1,.3,1);max-height:78vh;display:flex;flex-direction:column}.ai-sheet.open{transform:translateY(0)}.ai-handle{width:38px;height:4px;background:var(--white-faint);border-radius:3px;margin:.7rem auto .3rem}.ai-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:.4rem 1.3rem .8rem;border-bottom:1px solid var(--border)}.ai-sheet-title{display:flex;align-items:center;gap:.5rem;font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}.ai-sheet-title .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan-glow)}.ai-sheet-close{background:var(--white-faint);border:1px solid var(--border);color:var(--white-dim);width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:1rem;line-height:1;display:flex;align-items:center;justify-content:center}.ai-sheet-close:hover{border-color:var(--red);color:var(--red)}.ai-sheet-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;flex:1}.ai-sheet-sub{font-size:.78rem;color:var(--white-dim);margin-bottom:1rem}.ai-gen-btn{width:100%;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;padding:.75rem;font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:600;cursor:pointer;box-shadow:0 0 24px var(--cyan-glow);transition:transform .2s}.ai-gen-btn:active{transform:scale(.98)}.ai-gen-btn:disabled{opacity:.5;cursor:not-allowed}.ai-result{background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-top:1rem;font-size:.85rem;line-height:1.65;white-space:pre-wrap;animation:riseIn .35s cubic-bezier(.16,1,.3,1)}.ai-result.loading{color:var(--white-dim);font-style:italic;display:flex;align-items:center;gap:.5rem}.ai-result.error{color:var(--red);border-color:rgba(239,68,68,.3)}.ai-spinner{width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}@keyframes spin{to{transform:rotate(360deg)}}.ai-meta{font-size:.68rem;color:var(--cyan);margin-top:.6rem;letter-spacing:.03em;opacity:.85}
-@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}} @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.ai-fab{position:fixed;bottom:1.4rem;right:1.4rem;z-index:200;display:flex;align-items:center;gap:.5rem;background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;padding:.7rem 1.1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;box-shadow:0 4px 24px var(--cyan-glow),0 2px 8px rgba(0,0,0,.4);transition:transform .25s,box-shadow .25s}.ai-fab:hover{transform:translateY(-3px)}.ai-fab:active{transform:translateY(-1px) scale(.97)}.ai-fab .spark{font-size:1rem;animation:sparkle 2.2s ease-in-out infinite}@keyframes sparkle{0%,100%{transform:scale(1) rotate(0deg)}50%{transform:scale(1.15) rotate(12deg)}}
+.ai-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:300;opacity:0;pointer-events:none;transition:opacity .3s}.ai-backdrop.open{opacity:1;pointer-events:auto}
+.ai-sheet{position:fixed;left:0;right:0;bottom:0;z-index:301;max-width:760px;margin:0 auto;background:linear-gradient(170deg,var(--bg2),#0a0518);border:1px solid var(--border);border-bottom:none;border-radius:24px 24px 0 0;box-shadow:0 -10px 50px rgba(0,0,0,.6);transform:translateY(105%);transition:transform .4s cubic-bezier(.16,1,.3,1);max-height:82vh;display:flex;flex-direction:column}.ai-sheet.open{transform:translateY(0)}
+.ai-handle{width:38px;height:4px;background:var(--white-faint);border-radius:3px;margin:.7rem auto .3rem}
+.ai-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:.4rem 1.3rem .8rem;border-bottom:1px solid var(--border)}
+.ai-sheet-title{display:flex;align-items:center;gap:.5rem;font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem}.ai-sheet-title .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan-glow)}
+.ai-sheet-close{background:var(--white-faint);border:1px solid var(--border);color:var(--white-dim);width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center}.ai-sheet-close:hover{border-color:var(--red);color:var(--red)}
+.ai-sheet-body{padding:1rem 1.2rem 1.5rem;overflow-y:auto;flex:1}
+.ai-result{background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-top:.75rem;font-size:.85rem;line-height:1.65;white-space:pre-wrap;animation:riseIn .35s cubic-bezier(.16,1,.3,1)}.ai-result.loading{color:var(--white-dim);font-style:italic;display:flex;align-items:center;gap:.5rem}.ai-result.error{color:var(--red);border-color:rgba(239,68,68,.3)}
+.ai-spinner{width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}@keyframes spin{to{transform:rotate(360deg)}}
+.ai-meta{font-size:.68rem;color:var(--cyan);margin-top:.5rem;letter-spacing:.03em;opacity:.85}
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
+<!-- LOGIN -->
 <div class="login-wrap" id="loginView">
   <div class="card">
     <div class="card-title">👔 HR Dashboard</div>
@@ -35,24 +46,52 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
     <div class="msg" id="loginMsg"></div>
   </div>
 </div>
-<nav id="nav" style="display:none"><div class="logo">Attend<em style="font-style:italic">Track</em> · HR</div><div class="nav-right"><span class="nav-badge">HR</span><span class="nav-name" id="navName"></span><button class="btn-sm" onclick="logout()">Logout</button></div></nav>
-<div id="app"><div class="main"><div class="page-title">HR <em>Command Centre</em></div><div class="page-sub">All sites · All employees · Real-time attendance</div><div class="stats-grid"><div class="stat-card"><div class="stat-val" style="color:var(--green)" id="sToday">–</div><div class="stat-lbl">Today's check-ins</div></div><div class="stat-card"><div class="stat-val" style="color:var(--amber)" id="sPendingMgr">–</div><div class="stat-lbl">Pending manager</div></div><div class="stat-card"><div class="stat-val" style="color:var(--red)" id="sPendingHR">–</div><div class="stat-lbl">Pending HR review</div></div><div class="stat-card"><div class="stat-val" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div><div class="stat-card"><div class="stat-val" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div></div><div class="refresh-info"><span class="live-dot"></span>Auto-refreshes every 30s · Last: <span id="lastUpdate">–</span></div><div class="tabs"></div><div id="filterArea" style="display:none" class="filters"><input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()"><input type="text" id="filterEmp" placeholder="Filter by Employee ID" onchange="loadAll()"></div><div id="recList"></div></div></div>
-<!-- ── SCHEDULED REPORTS PANEL ── (shown when "Scheduled reports" tab is active) -->
+
+<!-- NAV -->
+<nav id="nav" style="display:none">
+  <div class="logo">Attend<em style="font-style:italic">Track</em> · HR</div>
+  <div class="nav-right">
+    <span class="nav-badge">HR</span>
+    <span class="nav-name" id="navName"></span>
+    <button class="btn-sm" onclick="logout()">Logout</button>
+  </div>
+</nav>
+
+<!-- MAIN APP -->
+<div id="app">
+  <div class="main">
+    <div class="page-title">HR <em>Command Centre</em></div>
+    <div class="page-sub">All sites · All employees · Real-time attendance</div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-val" style="color:var(--green)" id="sToday">–</div><div class="stat-lbl">Today's check-ins</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--amber)" id="sPendingMgr">–</div><div class="stat-lbl">Pending manager</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--red)" id="sPendingHR">–</div><div class="stat-lbl">Pending HR review</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div>
+    </div>
+    <div class="refresh-info"><span class="live-dot"></span>Auto-refreshes every 30s · Last: <span id="lastUpdate">–</span></div>
+    <div class="tabs"></div>
+    <div id="filterArea" style="display:none" class="filters">
+      <input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()">
+      <input type="text" id="filterEmp" placeholder="Filter by Employee ID" onchange="loadAll()">
+    </div>
+    <div id="recList"></div>
+  </div>
+</div>
+
+<!-- SCHEDULED REPORTS PANEL (tab-triggered) -->
 <div id="schedReportsPanel" style="display:none;position:fixed;inset:0;z-index:400;overflow-y:auto;background:var(--bg);padding-top:4.5rem">
   <div style="max-width:700px;margin:0 auto;padding:1.5rem">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem">
       <div>
         <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem">Scheduled <em style="font-style:italic;background:linear-gradient(135deg,var(--purple-mid),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent">Reports</em></div>
-        <div style="font-size:.78rem;color:var(--white-dim);margin-top:.2rem">Create automatic AI reports delivered by WhatsApp or logged to server</div>
+        <div style="font-size:.78rem;color:var(--white-dim);margin-top:.2rem">Automatic AI reports delivered by WhatsApp or logged to server</div>
       </div>
       <button class="btn-sm" onclick="closeSchedPanel()">✕ Close</button>
     </div>
-
-    <!-- New schedule form -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:1.2rem;margin-bottom:1.2rem">
       <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.9rem">➕ New Schedule</div>
-      <label>Report name</label>
-      <input id="srName" placeholder="e.g. Daily overtime digest">
+      <label>Report name</label><input id="srName" placeholder="e.g. Daily overtime digest">
       <label>Report type</label>
       <select id="srType">
         <option value="overtime_risk">Overtime risk (all sites)</option>
@@ -60,10 +99,8 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
         <option value="behaviour">Behaviour intelligence</option>
         <option value="full_hr">Full HR digest (all sites)</option>
       </select>
-      <div id="srSiteRow">
-        <label>Site (required for site_summary)</label>
-        <select id="srSite"><option value="">— All sites —</option></select>
-      </div>
+      <label>Site (required for site_summary)</label>
+      <select id="srSite"><option value="">— All sites —</option></select>
       <label>Frequency</label>
       <select id="srFreq">
         <option value="daily">Daily</option>
@@ -74,381 +111,302 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
       <input id="srHour" type="number" min="0" max="23" value="18" style="max-width:100px">
       <label>Delivery</label>
       <select id="srDelivery">
-        <option value="log">Log to server (no WhatsApp needed)</option>
+        <option value="log">Log to server</option>
         <option value="whatsapp">WhatsApp (requires Twilio)</option>
       </select>
       <div id="srRecipientsRow" style="display:none">
-        <label>Recipient phone numbers (comma-separated, with country code)</label>
+        <label>Recipient phone numbers (comma-separated)</label>
         <input id="srRecipients" placeholder="e.g. 9876543210, 9876543211">
       </div>
       <button class="btn btn-primary" id="srCreateBtn" onclick="createSchedule()" style="margin-top:.4rem">Create schedule →</button>
       <div id="srMsg" style="font-size:.8rem;margin-top:.5rem;display:none"></div>
     </div>
-
-    <!-- Existing schedules -->
     <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.7rem">Existing schedules</div>
     <div id="srList"><div style="color:var(--white-dim);font-size:.82rem;text-align:center;padding:1.5rem">Loading…</div></div>
   </div>
 </div>
 
-<button class="ai-fab" id="aiFab" onclick="openAiSheet()" style="display:none"><span class="spark">✨</span> AI Insights</button><div class="ai-backdrop" id="aiBackdrop" onclick="closeAiSheet()"></div><div class="ai-sheet" id="aiSheet"><div class="ai-handle"></div><div class="ai-sheet-head"><div class="ai-sheet-title"><span class="dot"></span> AI Insights</div><button class="ai-sheet-close" onclick="closeAiSheet()">✕</button></div><div class="ai-sheet-body"><div class="ai-sheet-sub">Sends real attendance data to an LLM and asks it to analyze overtime risk and patterns — actual AI reasoning over your data, not a fixed rule.</div><select id="aiSiteSelect" style="margin-bottom:.7rem"><option value="1">Main Construction Site</option><option value="2">Warehouse Zone A</option></select><button class="ai-gen-btn" id="aiGenBtn" onclick="generateAISummary()">✨ Generate report</button><div id="aiResult"></div></div></div>
-<script>window.ATTENDTRACK_PORTAL_ROLE='hr';window.ATTENDTRACK_API=window.ATTENDTRACK_API||'';</script>
-<script src="portal.js"></script>
-<script>
-// ─── SCHEDULED REPORTS PANEL ───────────────────────────────────────────────
-const API_BASE = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
+<!-- ✨ HR INTELLIGENCE FAB -->
+<button class="ai-fab" id="aiFab" onclick="openHrIntelligence()" style="display:none">
+  <span class="spark">✨</span> HR Intelligence
+</button>
 
-function escH(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+<!-- HR INTELLIGENCE BOTTOM SHEET -->
+<div class="ai-backdrop" id="aiBackdrop" onclick="closeHrIntelligence()"></div>
+<div class="ai-sheet" id="aiSheet">
+  <div class="ai-handle"></div>
+  <div class="ai-sheet-head">
+    <div class="ai-sheet-title"><span class="dot"></span> HR Intelligence</div>
+    <button class="ai-sheet-close" onclick="closeHrIntelligence()">✕</button>
+  </div>
+  <div class="ai-sheet-body">
 
-// Show the panel when "Scheduled reports" tab becomes active —
-// the tab is added dynamically by portal.js.  We intercept via MutationObserver.
-const _srObs = new MutationObserver(() => {
-  const active = document.querySelector('.tab.active');
-  if (active && active.dataset.tab === 'schedreports') {
-    openSchedPanel();
-  }
-});
-document.addEventListener('DOMContentLoaded', () => {
-  _srObs.observe(document.querySelector('.tabs') || document.body, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] });
-  // Delivery type toggle
-  const dlv = document.getElementById('srDelivery');
-  if (dlv) dlv.addEventListener('change', () => {
-    document.getElementById('srRecipientsRow').style.display = dlv.value === 'whatsapp' ? 'block' : 'none';
-  });
-  // Populate sites
-  fetch(`${API_BASE}/api/sites`).then(r=>r.json()).then(d=>{
-    const sel = document.getElementById('srSite');
-    if (sel) (d.sites||[]).forEach(s => {
-      const o = document.createElement('option');
-      o.value = s.id; o.textContent = s.name;
-      sel.appendChild(o);
-    });
-  }).catch(()=>{});
-});
-
-function openSchedPanel() {
-  document.getElementById('schedReportsPanel').style.display = 'block';
-  loadSchedules();
-}
-function closeSchedPanel() {
-  document.getElementById('schedReportsPanel').style.display = 'none';
-  // Switch back to overview tab
-  if (window.switchTab) window.switchTab('overview');
-}
-
-async function loadSchedules() {
-  const list = document.getElementById('srList');
-  try {
-    const res  = await fetch(`${API_BASE}/api/reports/schedules`);
-    const data = await res.json();
-    const items = (data.schedules || []).filter(s => s.enabled);
-    if (!items.length) {
-      list.innerHTML = '<div style="color:var(--white-dim);font-size:.82rem;text-align:center;padding:1rem">No schedules yet — create one above.</div>';
-      return;
-    }
-    list.innerHTML = items.map(s => `
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:.9rem;margin-bottom:.6rem">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div>
-            <div style="font-family:'Syne',sans-serif;font-weight:700">${escH(s.name)}</div>
-            <div style="font-size:.75rem;color:var(--white-dim);margin:.15rem 0">
-              ${escH(s.report_type)} · ${escH(s.frequency)} @ ${String(s.hour).padStart(2,'0')}:00 ·
-              ${s.site_name ? escH(s.site_name) : 'All sites'} · ${escH(s.delivery)}
-            </div>
-            <div style="font-size:.72rem;color:var(--purple-light)">Last run: ${s.last_run_at ? String(s.last_run_at).slice(0,16) : 'never'}</div>
-          </div>
-          <div style="display:flex;gap:.4rem;flex-shrink:0;margin-left:.5rem">
-            <button style="background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:#22d3ee;border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif"
-              onclick="runNow(${s.id})">▶ Run now</button>
-            <button style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red);border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif"
-              onclick="deleteSchedule(${s.id})">✕</button>
-          </div>
-        </div>
-      </div>`).join('');
-  } catch(e) {
-    list.innerHTML = `<div style="color:var(--red);font-size:.82rem">Error: ${escH(e.message)}</div>`;
-  }
-}
-
-async function createSchedule() {
-  const btn  = document.getElementById('srCreateBtn');
-  const msg  = document.getElementById('srMsg');
-  const name = document.getElementById('srName').value.trim();
-  const type = document.getElementById('srType').value;
-  const site = document.getElementById('srSite').value;
-  const freq = document.getElementById('srFreq').value;
-  const hour = parseInt(document.getElementById('srHour').value, 10);
-  const dlv  = document.getElementById('srDelivery').value;
-  const recs = document.getElementById('srRecipients').value
-                 .split(',').map(s=>s.trim()).filter(Boolean);
-
-  if (!name) { showSrMsg('Report name is required', 'err'); return; }
-  if (isNaN(hour) || hour < 0 || hour > 23) { showSrMsg('Hour must be 0–23', 'err'); return; }
-
-  // Get logged-in HR id from portal.js state (exposed via window)
-  const hrId = window._getCurrentUserId ? window._getCurrentUserId() : null;
-  if (!hrId) { showSrMsg('Not logged in', 'err'); return; }
-
-  btn.disabled = true; btn.textContent = 'Creating…';
-  try {
-    const res = await fetch(`${API_BASE}/api/reports/schedule`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        name, report_type: type, frequency: freq, hour,
-        site_id: site ? parseInt(site) : null,
-        recipients: recs, delivery: dlv,
-        created_by: hrId
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Failed');
-    showSrMsg(`✅ ${data.message}`, 'ok');
-    document.getElementById('srName').value = '';
-    loadSchedules();
-  } catch(e) {
-    showSrMsg('⚠️ ' + e.message, 'err');
-  } finally {
-    btn.disabled = false; btn.textContent = 'Create schedule →';
-  }
-}
-
-async function runNow(id) {
-  try {
-    const res  = await fetch(`${API_BASE}/api/reports/run-now/${id}`, {method:'POST'});
-    const data = await res.json();
-    alert(data.message || 'Queued');
-  } catch(e) { alert(e.message); }
-}
-
-async function deleteSchedule(id) {
-  if (!confirm('Disable this schedule?')) return;
-  const hrId = window._getCurrentUserId ? window._getCurrentUserId() : '';
-  try {
-    const res = await fetch(`${API_BASE}/api/reports/schedule/${id}?hr_id=${encodeURIComponent(hrId)}`,
-                            {method:'DELETE'});
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Failed');
-    loadSchedules();
-  } catch(e) { alert(e.message); }
-}
-
-function showSrMsg(text, type) {
-  const el = document.getElementById('srMsg');
-  el.textContent = text;
-  el.style.display = 'block';
-  el.style.color = type === 'err' ? 'var(--red)' : 'var(--green)';
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HR Q&A PANEL
-// ═══════════════════════════════════════════════════════════════════════════
-function openHrQaPanel() {
-  document.getElementById('hrQaPanel').style.display = 'block';
-  // populate employee selector
-  fetch(`${API_BASE}/api/employees`)
-    .then(r => r.json())
-    .then(d => {
-      const sel = document.getElementById('qaEmpSelect');
-      const labours = (d.employees || []).filter(e => e.role === 'labour');
-      sel.innerHTML = '<option value="">— All employees —</option>' +
-        labours.map(e => `<option value="${escH(e.employee_id)}">${escH(e.name)} (${escH(e.employee_id)})</option>`).join('');
-    }).catch(() => {});
-}
-function closeHrQaPanel() {
-  document.getElementById('hrQaPanel').style.display = 'none';
-  if (window.switchTab) window.switchTab('overview');
-}
-
-const HR_QA_CHIPS = [
-  ['How many hours has this employee worked this month?', 'Hours this month'],
-  ['Is this employee at risk of exceeding overtime?', 'Overtime risk'],
-  ['Show me all rejected records for this employee', 'Rejected records'],
-  ['Which employees are working the most hours?', 'Top hours (all)'],
-  ['Who has been absent the most this month?', 'Most absent (all)'],
-  ['Summarise attendance patterns across all sites', 'Site summary (all)'],
-  ['Flag any employees showing unusual behaviour', 'Behaviour flags (all)'],
-  ['Which employees have not checked in today?', "Not checked in today"],
-];
-
-document.addEventListener('DOMContentLoaded', () => {
-  const chips = document.getElementById('hrQaChips');
-  if (chips) {
-    chips.innerHTML = HR_QA_CHIPS.map(([q, label]) =>
-      `<span class="chip" onclick="fillHrQa(${JSON.stringify(q)})">${escH(label)}</span>`
-    ).join('');
-  }
-});
-
-function fillHrQa(text) {
-  const inp = document.getElementById('hrQaInput');
-  if (inp) { inp.value = text; inp.focus(); }
-}
-
-async function askHrQuestion() {
-  const hrId    = window._getCurrentUserId ? window._getCurrentUserId() : null;
-  if (!hrId) { alert('Not logged in'); return; }
-  const inp     = document.getElementById('hrQaInput');
-  const question = (inp?.value || '').trim();
-  if (!question) return;
-  const empId   = document.getElementById('qaEmpSelect')?.value || null;
-  const btn     = document.getElementById('hrQaBtn');
-  const ansBox  = document.getElementById('hrQaAnswer');
-  const ansText = document.getElementById('hrQaAnswerText');
-  const ansMeta = document.getElementById('hrQaAnswerMeta');
-
-  btn.disabled = true; btn.textContent = '…';
-  ansBox.style.display = 'block';
-  ansText.textContent  = 'Asking AI — analysing employee data…';
-  ansMeta.textContent  = '';
-
-  try {
-    const res = await fetch(`${API_BASE}/api/hr/ask`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        hr_id: hrId,
-        question,
-        employee_id: empId || null,
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Request failed');
-    ansText.textContent = data.answer;
-    const scope = empId ? `about ${escH(empId)}` : `across ${data.employees_in_context} employee(s)`;
-    ansMeta.textContent = (data.ai_used ? '✨ AI-powered' : '⚠️ AI unavailable') + ` · ${scope}`;
-    inp.value = '';
-  } catch(e) {
-    ansText.textContent = '⚠️ ' + e.message;
-  } finally {
-    btn.disabled = false; btn.textContent = 'Ask →';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EXCEL DOWNLOAD
-// ═══════════════════════════════════════════════════════════════════════════
-async function downloadExcel() {
-  const period = document.getElementById('xlPeriod').value;
-  const now    = new Date();
-  let url      = `${API_BASE}/api/hr/report/excel?period=${period}&year=${now.getFullYear()}`;
-  if (period === 'monthly') {
-    url += `&month=${now.getMonth() + 1}`;
-  } else {
-    // ISO week
-    const jan4   = new Date(now.getFullYear(), 0, 4);
-    const week   = Math.ceil(((now - jan4) / 86400000 + jan4.getDay() + 1) / 7);
-    url += `&week=${week}`;
-  }
-  const btn = document.getElementById('xlBtn');
-  btn.disabled = true; btn.textContent = '⏳ Building…';
-  try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Server error');
-    }
-    const blob = await res.blob();
-    const a    = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    const cd   = res.headers.get('content-disposition') || '';
-    const m    = cd.match(/filename="(.+?)"/);
-    a.download = m ? m[1] : `AttendTrack_report.xlsx`;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
-  } catch(e) {
-    alert('Download failed: ' + e.message);
-  } finally {
-    btn.disabled = false; btn.textContent = '⬇ Download Excel';
-  }
-}
-
-// MutationObserver wires hrqa and reports tabs
-const _qaObs = new MutationObserver(() => {
-  const active = document.querySelector('.tab.active');
-  if (!active) return;
-  if (active.dataset.tab === 'hrqa')   openHrQaPanel();
-  if (active.dataset.tab === 'schedreports') openSchedPanel();
-});
-document.addEventListener('DOMContentLoaded', () => {
-  _qaObs.observe(document.querySelector('.tabs') || document.body,
-    { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-});
-</script>
-
-<!-- ══ HR Q&A PANEL ══════════════════════════════════════════════════════════ -->
-<div id="hrQaPanel" style="display:none;position:fixed;inset:0;z-index:400;overflow-y:auto;background:var(--bg);padding-top:4.5rem">
-  <div style="max-width:760px;margin:0 auto;padding:1.5rem">
-
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem">
-      <div>
-        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem">
-          HR <em style="font-style:italic;background:linear-gradient(135deg,var(--purple-mid),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent">Intelligence</em>
-        </div>
-        <div style="font-size:.78rem;color:var(--white-dim);margin-top:.2rem">Ask anything about any employee — the AI reads their live records to answer</div>
-      </div>
-      <button class="btn-sm" onclick="closeHrQaPanel()">✕ Close</button>
-    </div>
-
-    <!-- Excel download card -->
-    <div style="background:var(--bg2);border:1px solid rgba(34,211,238,.25);border-radius:16px;padding:1.1rem;margin-bottom:1.2rem">
-      <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.6rem;color:var(--cyan)">📊 Download Excel Report</div>
-      <div style="font-size:.78rem;color:var(--white-dim);margin-bottom:.8rem">
-        5 sheets: Summary · Full Attendance · Overtime · Absent Days · Sick &amp; Short Shifts
-      </div>
-      <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
-        <select id="xlPeriod" style="width:auto;margin:0;flex:1;min-width:160px">
+    <!-- Excel download strip -->
+    <div style="background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.22);border-radius:14px;padding:.85rem 1rem;margin-bottom:.9rem">
+      <div style="font-size:.73rem;font-weight:600;color:var(--cyan);margin-bottom:.4rem">📊 Excel Report — 5 sheets: Summary · Attendance · Overtime · Absent Days · Sick &amp; Short Shifts</div>
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <select id="xlPeriod" style="flex:1;min-width:130px;margin:0;font-size:.8rem;padding:.42rem .7rem">
           <option value="monthly">This Month</option>
           <option value="weekly">This Week</option>
         </select>
         <button id="xlBtn" onclick="downloadExcel()"
-          style="background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;
-                 border-radius:100px;padding:.62rem 1.2rem;font-family:'DM Sans',sans-serif;
-                 font-weight:600;font-size:.85rem;cursor:pointer;white-space:nowrap;
-                 box-shadow:0 0 20px var(--cyan-glow)">
+          style="background:linear-gradient(135deg,var(--violet),var(--cyan));color:#fff;border:none;border-radius:100px;padding:.48rem 1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.8rem;cursor:pointer;white-space:nowrap;box-shadow:0 0 14px var(--cyan-glow)">
           ⬇ Download Excel
         </button>
       </div>
     </div>
 
-    <!-- Q&A card -->
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:1.1rem">
-      <div style="font-family:'Syne',sans-serif;font-weight:700;margin-bottom:.6rem">🤖 Ask the AI</div>
-      <div style="font-size:.78rem;color:var(--white-dim);margin-bottom:.85rem">
-        Select a specific employee to ask about them, or leave blank to ask across all employees.
-      </div>
+    <!-- Employee selector -->
+    <div style="font-size:.68rem;color:var(--purple-light);letter-spacing:.07em;text-transform:uppercase;margin-bottom:.3rem">Employee (optional — blank = ask about all)</div>
+    <select id="qaEmpSelect" style="margin-bottom:.65rem;font-size:.82rem;padding:.5rem .8rem"></select>
 
-      <label>Employee (optional)</label>
-      <select id="qaEmpSelect" style="margin-bottom:.75rem">
-        <option value="">— All employees —</option>
-      </select>
+    <!-- Quick chips — all 8 -->
+    <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.7rem" id="hrQaChips"></div>
 
-      <!-- Quick chips -->
-      <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.75rem" id="hrQaChips"></div>
+    <!-- Free-text input -->
+    <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+      <input id="hrQaInput" placeholder="Ask anything about any employee…"
+             style="flex:1;margin:0;font-size:.84rem;padding:.52rem .85rem"
+             onkeydown="if(event.key==='Enter') askHrQuestion()">
+      <button id="hrQaBtn" onclick="askHrQuestion()"
+        style="background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border:none;border-radius:100px;padding:.52rem 1rem;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.82rem;cursor:pointer;white-space:nowrap">
+        Ask →
+      </button>
+    </div>
 
-      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
-        <input id="hrQaInput"
-               placeholder="e.g. How many hours has this employee worked this month?"
-               style="flex:1;margin:0"
-               onkeydown="if(event.key==='Enter') askHrQuestion()">
-        <button id="hrQaBtn" onclick="askHrQuestion()"
-          style="background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border:none;
-                 border-radius:100px;padding:.62rem 1.1rem;font-family:'DM Sans',sans-serif;
-                 font-weight:600;font-size:.82rem;cursor:pointer;white-space:nowrap">
-          Ask →
-        </button>
-      </div>
-
-      <div id="hrQaAnswer" style="display:none;background:rgba(124,58,237,.07);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-top:.5rem">
-        <div style="font-size:.65rem;color:var(--purple-light);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem">AI Answer</div>
-        <div id="hrQaAnswerText" style="font-size:.85rem;line-height:1.65;white-space:pre-wrap"></div>
-        <div id="hrQaAnswerMeta" style="font-size:.65rem;color:var(--white-dim);margin-top:.5rem"></div>
-      </div>
+    <!-- Answer -->
+    <div id="hrQaAnswer" style="display:none">
+      <div class="ai-result" id="hrQaAnswerText"></div>
+      <div class="ai-meta" id="hrQaAnswerMeta"></div>
     </div>
 
   </div>
 </div>
 
+<script>window.ATTENDTRACK_PORTAL_ROLE='hr';window.ATTENDTRACK_API=window.ATTENDTRACK_API||'';</script>
+<script src="portal.js"></script>
+<script>
+// ─── HR INTELLIGENCE — all logic self-contained ───────────────────────────
+const API_BASE = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
+function escH(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// open/close — FAB triggers openHrIntelligence(); portal.js stubs openAiSheet/closeAiSheet
+function openHrIntelligence(){
+  document.getElementById('aiBackdrop').classList.add('open');
+  document.getElementById('aiSheet').classList.add('open');
+  _loadEmpSelect();
+}
+function closeHrIntelligence(){
+  document.getElementById('aiBackdrop').classList.remove('open');
+  document.getElementById('aiSheet').classList.remove('open');
+}
+function openAiSheet(){openHrIntelligence();}
+function closeAiSheet(){closeHrIntelligence();}
+function generateAISummary(){openHrIntelligence();}  // safety stub
+
+// employee dropdown — loads once
+let _empLoaded = false;
+function _loadEmpSelect(){
+  if(_empLoaded) return;
+  fetch(`${API_BASE}/api/employees`).then(r=>r.json()).then(d=>{
+    const sel = document.getElementById('qaEmpSelect');
+    if(!sel) return;
+    const labs = (d.employees||[]).filter(e=>e.role==='labour');
+    sel.innerHTML = '<option value="">— All employees —</option>' +
+      labs.map(e=>`<option value="${escH(e.employee_id)}">${escH(e.name)} (${escH(e.employee_id)})</option>`).join('');
+    _empLoaded = true;
+  }).catch(()=>{});
+}
+
+// 8 quick-action chips
+const HR_CHIPS = [
+  ['How many hours has this employee worked this month?',  'Hours this month'],
+  ['Is this employee at risk of exceeding overtime?',      'Overtime risk'],
+  ['Show me all rejected records for this employee',       'Rejected records'],
+  ['Which employees are working the most hours?',          'Top hours (all)'],
+  ['Who has been absent the most this month?',             'Most absent (all)'],
+  ['Summarise attendance patterns across all sites',       'Site summary (all)'],
+  ['Flag any employees showing unusual behaviour',         'Behaviour flags (all)'],
+  ['Which employees have not checked in today?',           'Not checked in today'],
+];
+document.addEventListener('DOMContentLoaded', ()=>{
+  const chips = document.getElementById('hrQaChips');
+  if(chips) chips.innerHTML = HR_CHIPS.map(([q,label])=>
+    `<span class="chip" onclick="fillHrQa(${JSON.stringify(q)})">${escH(label)}</span>`
+  ).join('');
+
+  // scheduled reports delivery toggle
+  const dlv = document.getElementById('srDelivery');
+  if(dlv) dlv.addEventListener('change', ()=>{
+    document.getElementById('srRecipientsRow').style.display = dlv.value==='whatsapp' ? 'block' : 'none';
+  });
+  // populate sites for scheduled reports
+  fetch(`${API_BASE}/api/sites`).then(r=>r.json()).then(d=>{
+    const sel = document.getElementById('srSite');
+    if(sel)(d.sites||[]).forEach(s=>{
+      const o=document.createElement('option'); o.value=s.id; o.textContent=s.name; sel.appendChild(o);
+    });
+  }).catch(()=>{});
+});
+
+function fillHrQa(text){
+  const inp = document.getElementById('hrQaInput');
+  if(inp){inp.value=text; inp.focus();}
+}
+
+// Ask the AI
+async function askHrQuestion(){
+  const hrId = window._getCurrentUserId ? window._getCurrentUserId() : null;
+  if(!hrId){alert('Please log in first.'); return;}
+  const inp      = document.getElementById('hrQaInput');
+  const question = (inp?.value||'').trim();
+  if(!question) return;
+  const empId    = document.getElementById('qaEmpSelect')?.value || null;
+  const btn      = document.getElementById('hrQaBtn');
+  const ansBox   = document.getElementById('hrQaAnswer');
+  const ansText  = document.getElementById('hrQaAnswerText');
+  const ansMeta  = document.getElementById('hrQaAnswerMeta');
+  btn.disabled=true; btn.textContent='…';
+  ansBox.style.display='block';
+  ansText.className='ai-result loading';
+  ansText.innerHTML='<span class="ai-spinner"></span> Asking AI — reading employee records…';
+  ansMeta.textContent='';
+  try{
+    const res = await fetch(`${API_BASE}/api/hr/ask`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hr_id:hrId, question, employee_id:empId||null})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail||'Request failed');
+    ansText.className='ai-result';
+    ansText.textContent=data.answer;
+    const scope = empId ? `about ${escH(empId)}` : `across ${data.employees_in_context} employee(s)`;
+    ansMeta.textContent=(data.ai_used?'✨ AI-powered':'⚠️ AI unavailable')+` · ${scope}`;
+    inp.value='';
+  }catch(e){
+    ansText.className='ai-result error';
+    ansText.textContent='⚠️ '+e.message;
+  }finally{
+    btn.disabled=false; btn.textContent='Ask →';
+  }
+}
+
+// Excel download
+async function downloadExcel(){
+  const period = document.getElementById('xlPeriod').value;
+  const now    = new Date();
+  let url = `${API_BASE}/api/hr/report/excel?period=${period}&year=${now.getFullYear()}`;
+  if(period==='monthly'){
+    url += `&month=${now.getMonth()+1}`;
+  } else {
+    const jan4 = new Date(now.getFullYear(),0,4);
+    const week = Math.ceil(((now-jan4)/86400000+jan4.getDay()+1)/7);
+    url += `&week=${week}`;
+  }
+  const btn = document.getElementById('xlBtn');
+  btn.disabled=true; btn.textContent='⏳ Building…';
+  try{
+    const res = await fetch(url);
+    if(!res.ok){const e=await res.json().catch(()=>({})); throw new Error(e.detail||'Server error');}
+    const blob=await res.blob();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    const m=(res.headers.get('content-disposition')||'').match(/filename="(.+?)"/);
+    a.download=m?m[1]:'AttendTrack_report.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }catch(e){
+    alert('Download failed: '+e.message);
+  }finally{
+    btn.disabled=false; btn.textContent='⬇ Download Excel';
+  }
+}
+
+// ─── Scheduled reports panel (tab-triggered via MutationObserver) ─────────
+const _srObs = new MutationObserver(()=>{
+  const active = document.querySelector('.tab.active');
+  if(active && active.dataset.tab==='schedreports') openSchedPanel();
+});
+document.addEventListener('DOMContentLoaded',()=>{
+  _srObs.observe(document.querySelector('.tabs')||document.body,
+    {childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+});
+function openSchedPanel(){
+  document.getElementById('schedReportsPanel').style.display='block';
+  loadSchedules();
+}
+function closeSchedPanel(){
+  document.getElementById('schedReportsPanel').style.display='none';
+  if(window.switchTab) window.switchTab('overview');
+}
+async function loadSchedules(){
+  const list=document.getElementById('srList');
+  try{
+    const res=await fetch(`${API_BASE}/api/reports/schedules`);
+    const data=await res.json();
+    const items=(data.schedules||[]).filter(s=>s.enabled);
+    if(!items.length){list.innerHTML='<div style="color:var(--white-dim);font-size:.82rem;text-align:center;padding:1rem">No schedules yet.</div>'; return;}
+    list.innerHTML=items.map(s=>`
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:.9rem;margin-bottom:.6rem">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-family:'Syne',sans-serif;font-weight:700">${escH(s.name)}</div>
+            <div style="font-size:.75rem;color:var(--white-dim);margin:.15rem 0">${escH(s.report_type)} · ${escH(s.frequency)} @ ${String(s.hour).padStart(2,'0')}:00 · ${s.site_name?escH(s.site_name):'All sites'} · ${escH(s.delivery)}</div>
+            <div style="font-size:.72rem;color:var(--purple-light)">Last run: ${s.last_run_at?String(s.last_run_at).slice(0,16):'never'}</div>
+          </div>
+          <div style="display:flex;gap:.4rem;flex-shrink:0;margin-left:.5rem">
+            <button style="background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.3);color:#22d3ee;border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif" onclick="runNow(${s.id})">▶ Run now</button>
+            <button style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red);border-radius:100px;padding:.3rem .75rem;font-size:.72rem;cursor:pointer;font-family:'DM Sans',sans-serif" onclick="deleteSchedule(${s.id})">✕</button>
+          </div>
+        </div>
+      </div>`).join('');
+  }catch(e){list.innerHTML=`<div style="color:var(--red);font-size:.82rem">Error: ${escH(e.message)}</div>`;}
+}
+async function createSchedule(){
+  const btn=document.getElementById('srCreateBtn');
+  const name=document.getElementById('srName').value.trim();
+  const type=document.getElementById('srType').value;
+  const site=document.getElementById('srSite').value;
+  const freq=document.getElementById('srFreq').value;
+  const hour=parseInt(document.getElementById('srHour').value,10);
+  const dlv=document.getElementById('srDelivery').value;
+  const recs=document.getElementById('srRecipients').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!name){showSrMsg('Report name is required','err'); return;}
+  if(isNaN(hour)||hour<0||hour>23){showSrMsg('Hour must be 0–23','err'); return;}
+  const hrId=window._getCurrentUserId?window._getCurrentUserId():null;
+  if(!hrId){showSrMsg('Not logged in','err'); return;}
+  btn.disabled=true; btn.textContent='Creating…';
+  try{
+    const res=await fetch(`${API_BASE}/api/reports/schedule`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,report_type:type,frequency:freq,hour,site_id:site?parseInt(site):null,recipients:recs,delivery:dlv,created_by:hrId})
+    });
+    const data=await res.json();
+    if(!res.ok) throw new Error(data.detail||'Failed');
+    showSrMsg(`✅ ${data.message}`,'ok');
+    document.getElementById('srName').value='';
+    loadSchedules();
+  }catch(e){showSrMsg('⚠️ '+e.message,'err');}
+  finally{btn.disabled=false; btn.textContent='Create schedule →';}
+}
+async function runNow(id){
+  try{const res=await fetch(`${API_BASE}/api/reports/run-now/${id}`,{method:'POST'}); const d=await res.json(); alert(d.message||'Queued');}
+  catch(e){alert(e.message);}
+}
+async function deleteSchedule(id){
+  if(!confirm('Disable this schedule?')) return;
+  const hrId=window._getCurrentUserId?window._getCurrentUserId():'';
+  try{
+    const res=await fetch(`${API_BASE}/api/reports/schedule/${id}?hr_id=${encodeURIComponent(hrId)}`,{method:'DELETE'});
+    const d=await res.json(); if(!res.ok) throw new Error(d.detail||'Failed');
+    loadSchedules();
+  }catch(e){alert(e.message);}
+}
+function showSrMsg(text,type){
+  const el=document.getElementById('srMsg');
+  el.textContent=text; el.style.display='block';
+  el.style.color=type==='err'?'var(--red)':'var(--green)';
+}
+</script>
 </body>
 </html>
