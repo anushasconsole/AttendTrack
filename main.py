@@ -383,7 +383,7 @@ def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
               ("Warehouse Zone A","56 Industrial Area, Muscat",12.618852,75.249893,1000000000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (%s,%s,%s,%s,%s,%s)",
-              ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
+              ("HR001","Issa al bahlani","hr",_hash("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
               ("MGR001","Rajesh Kumar","manager",_hash("mgr123"),"9876543211","Operations",1))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
