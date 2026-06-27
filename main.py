@@ -51,6 +51,9 @@ OVERTIME_WARN_AT     = float(os.getenv("OVERTIME_WARN_AT", "0.5"))  # warn at 90
 TWILIO_SID        = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM       = os.getenv("TWILIO_WHATSAPP_FROM", "")  # e.g. "whatsapp:+14155238886"
+# Default country code for numbers stored without one (e.g. "9876543210" → "+91 9876543210")
+# Set WHATSAPP_DEFAULT_CC=+968 for Oman, +91 for India, etc.
+WHATSAPP_DEFAULT_CC = os.getenv("WHATSAPP_DEFAULT_CC", "+91")
 
 WHATSAPP_READY = False
 twilio_client = None
@@ -66,20 +69,36 @@ except ImportError:
     print("⚠️  twilio package not installed — overtime alerts will be LOGGED ONLY")
 
 def send_whatsapp_alert(to_phone: str, message: str) -> dict:
-    """Sends a WhatsApp message via Twilio if configured; otherwise logs and
-    returns a result dict so callers can still record that an alert 'fired'."""
+    """
+    Sends a WhatsApp message via Twilio.
+    Handles phone numbers stored in any of these formats:
+      9876543210        → assumes WHATSAPP_DEFAULT_CC country code (e.g. +91)
+      919876543210      → already has country code digits, just add +
+      +919876543210     → already fully qualified
+      whatsapp:+91...   → already in Twilio format
+    Falls back to logging if Twilio is not configured.
+    """
     if not to_phone:
         return {"sent": False, "reason": "no_phone_on_file"}
     if not WHATSAPP_READY:
-        print(f"[OVERTIME ALERT - NOT SENT, no Twilio config] to={to_phone}: {message}", flush=True)
+        print(f"[WHATSAPP NOT SENT — no Twilio config] to={to_phone}: {message[:80]}…", flush=True)
         return {"sent": False, "reason": "twilio_not_configured"}
     try:
-        to_whatsapp = to_phone if to_phone.startswith("whatsapp:") else f"whatsapp:+{to_phone.lstrip('+')}"
+        raw = str(to_phone).strip()
+        # Strip existing whatsapp: prefix so we can normalise cleanly
+        if raw.lower().startswith("whatsapp:"):
+            raw = raw[9:]
+        # Strip leading +
+        digits = raw.lstrip("+").strip()
+        # If the number looks like a local number (≤10 digits), prepend default country code
+        if len(digits) <= 10:
+            digits = WHATSAPP_DEFAULT_CC.lstrip("+") + digits
+        to_whatsapp = f"whatsapp:+{digits}"
         msg = twilio_client.messages.create(from_=TWILIO_FROM, to=to_whatsapp, body=message)
-        print(f"[OVERTIME ALERT SENT] sid={msg.sid} to={to_phone}", flush=True)
-        return {"sent": True, "sid": msg.sid}
+        print(f"[WHATSAPP SENT] sid={msg.sid} to={to_whatsapp}", flush=True)
+        return {"sent": True, "sid": msg.sid, "to": to_whatsapp}
     except Exception as e:
-        print(f"[OVERTIME ALERT FAILED] to={to_phone}: {type(e).__name__}: {e}", flush=True)
+        print(f"[WHATSAPP FAILED] to={to_phone}: {type(e).__name__}: {e}", flush=True)
         return {"sent": False, "reason": str(e)}
 
 # ─────────────────────────────────────────────
@@ -1883,19 +1902,61 @@ async def delete_schedule(schedule_id: int, hr_id: str):
 
 @app.post("/api/reports/run-now/{schedule_id}")
 async def run_report_now(schedule_id: int):
-    """Manually trigger a scheduled report immediately (for testing/HR use)."""
+    """
+    Manually trigger a scheduled report and WAIT for it to complete.
+    Returns the delivery result so the caller can see exactly what happened
+    (report text, who was sent to, whether Twilio succeeded).
+    """
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("SELECT id FROM scheduled_reports WHERE id=%s", (schedule_id,))
-        if not c.fetchone():
+        c.execute("SELECT id, name FROM scheduled_reports WHERE id=%s", (schedule_id,))
+        row = c.fetchone()
+        if not row:
             raise HTTPException(404, "Schedule not found")
     finally:
         release_db(conn)
-    # Run in background so the response returns immediately
-    import asyncio
-    asyncio.create_task(_run_scheduled_report(schedule_id))
-    return {"success": True, "message": f"Report {schedule_id} queued — check report_runs table for result"}
+
+    # Run synchronously so the response carries the full result
+    await _run_scheduled_report(schedule_id)
+
+    # Fetch the run log entry we just wrote
+    conn2 = get_db()
+    try:
+        c2 = conn2.cursor()
+        c2.execute("""SELECT ran_at, status, ai_used, report_text, error_msg, delivered_to
+                      FROM report_runs WHERE schedule_id=%s
+                      ORDER BY ran_at DESC LIMIT 1""", (schedule_id,))
+        run = c2.fetchone()
+    finally:
+        release_db(conn2)
+
+    run_dict = dict(run) if run else {}
+    delivered = run_dict.get("delivered_to") or []
+    if isinstance(delivered, str):
+        try:
+            delivered = json.loads(delivered)
+        except Exception:
+            delivered = []
+
+    sent_count = sum(1 for d in delivered if d.get("sent"))
+    total_count = len(delivered)
+
+    return {
+        "success":       run_dict.get("status") == "ok",
+        "status":        run_dict.get("status"),
+        "ai_used":       run_dict.get("ai_used"),
+        "delivered_to":  delivered,
+        "sent_count":    sent_count,
+        "total_recipients": total_count,
+        "error":         run_dict.get("error_msg"),
+        "report_preview": (run_dict.get("report_text") or "")[:400],
+        "message": (
+            f"✅ Report sent to {sent_count}/{total_count} recipient(s) via WhatsApp"
+            if sent_count > 0
+            else "⚠️ Report generated but not sent via WhatsApp — check delivery settings and Twilio config"
+        )
+    }
 
 
 @app.get("/api/reports/history/{schedule_id}")
