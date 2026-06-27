@@ -31,7 +31,6 @@
         ['predict', 'Predictions'],
         ['behaviour', 'Behaviour intelligence'],
         ['history', 'History'],
-        ['log', 'Action log'],
       ],
     },
     hr: {
@@ -62,7 +61,6 @@
         ['predict', 'Predictions'],
         ['behaviour', 'Behaviour intelligence'],
         ['schedreports', 'Scheduled reports'],
-        ['log', 'Action log'],
       ],
     },
   };
@@ -77,7 +75,6 @@
     siteList: [],
     allRecords: [],
     pendingRecords: [],
-    sessionLog: [],
     refreshTimer: null,
     aiBusy: false,
   };
@@ -556,49 +553,6 @@
     setHtml('recList', html.join(''));
   }
 
-  function renderLog(records) {
-    const derived = [];
-    records.slice(0, 40).forEach((record) => {
-      if (record.logout_time || record.status === 'pending_manager' || record.status === 'pending_hr' || record.status === 'approved' || record.status === 'rejected') {
-        const verb = record.status === 'rejected'
-          ? 'Record rejected'
-          : record.status === 'approved'
-            ? 'Record approved'
-            : record.status === 'pending_hr'
-              ? 'Manager approved → pending HR review'
-              : 'Check-out pending manager review';
-        derived.push({
-          kind: record.status === 'rejected' ? 'denied' : record.status === 'approved' ? 'decision' : 'checkin',
-          text: `${verb} · ${recordTitle(record)} · ${record.site_name || 'site unknown'}`,
-          actor: record.status === 'approved' || record.status === 'rejected' ? 'System' : 'Attendance engine',
-          time: record.logout_time || record.login_time || record.date,
-        });
-      }
-    });
-    state.sessionLog.forEach((item) => derived.unshift(item));
-
-    if (!derived.length) {
-      setHtml('recList', '<div class="empty">No log entries yet.</div>');
-      return;
-    }
-
-    const iconMap = { alert: '⚠️', checkin: '✅', denied: '⛔', decision: '📝' };
-    const html = [renderBanner('Action log', 'A derived audit trail from recent attendance events and approvals. Any action taken in this session is shown first.')];
-    derived.slice(0, 30).forEach((item) => {
-      html.push(`
-        <div class="rec-card">
-          <div class="rec-head">
-            <div>
-              <div class="rec-name">${iconMap[item.kind] || '•'} ${escapeHtml(item.text)}</div>
-              <div class="rec-meta">${escapeHtml(item.actor)} · ${escapeHtml(timeOnly(item.time))}</div>
-            </div>
-          </div>
-        </div>`);
-    });
-
-    setHtml('recList', html.join(''));
-  }
-
   async function loadEmployees() {
     if (state.employees.length) return state.employees;
     const payload = await apiJson('/api/employees');
@@ -701,11 +655,6 @@
       await loadEmployees();
       renderBehaviour(state.allRecords);
       return;
-    }
-
-    if (state.currentTab === 'log') {
-      if (!state.allRecords.length) await loadAllRecords();
-      renderLog(state.allRecords);
     }
 
     if (state.currentTab === 'schedreports') {
@@ -817,7 +766,6 @@
     state.currentSummary = null;
     state.allRecords = [];
     state.pendingRecords = [];
-    state.sessionLog = [];
     applyRoleVisibility(false);
     if (el('aiFab')) el('aiFab').style.display = 'none';
     if (el('loginMsg')) {
@@ -866,13 +814,7 @@
       });
       const card = el(`rc${attendanceId}`);
       if (card) card.style.opacity = '0.35';
-      state.sessionLog.unshift({
-        kind: approved ? 'decision' : 'denied',
-        text: `${approved ? 'Approved' : 'Rejected'} record ${attendanceId}`,
-        actor: cfg.label,
-        time: currentHM(),
-      });
-      if (state.currentTab === 'pending' || state.currentTab === 'log') {
+      if (state.currentTab === 'pending') {
         await loadAll();
       } else {
         state.pendingRecords = state.pendingRecords.filter((record) => record.id !== attendanceId);
