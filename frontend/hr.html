@@ -390,8 +390,30 @@ async function createSchedule(){
   finally{btn.disabled=false; btn.textContent='Create schedule →';}
 }
 async function runNow(id){
-  try{const res=await fetch(`${API_BASE}/api/reports/run-now/${id}`,{method:'POST'}); const d=await res.json(); alert(d.message||'Queued');}
-  catch(e){alert(e.message);}
+  const btn = event.target;
+  const origText = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Running…';
+  try{
+    const res  = await fetch(`${API_BASE}/api/reports/run-now/${id}`, { method: 'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Failed');
+
+    // Build a readable result popup
+    const preview = data.report_preview ? `\n\n📄 Preview:\n${data.report_preview}${data.report_preview.length >= 400 ? '…' : ''}` : '';
+    const deliveryLines = (data.delivered_to || []).map(d =>
+      d.phone
+        ? `  ${d.sent ? '✅' : '❌'} ${d.phone}${d.chunks > 1 ? ` (${d.chunks} msgs)` : ''}`
+        : `  📋 ${d.channel || 'log'}`
+    ).join('\n');
+    const body = [
+      data.message,
+      data.error ? `\n⚠️ Error: ${data.error}` : '',
+      deliveryLines ? `\nDelivery:\n${deliveryLines}` : '',
+      preview,
+    ].filter(Boolean).join('');
+    alert(body);
+  }catch(e){ alert('⚠️ ' + e.message); }
+  finally{ btn.disabled = false; btn.textContent = origText; }
 }
 async function deleteSchedule(id){
   if(!confirm('Disable this schedule?')) return;
