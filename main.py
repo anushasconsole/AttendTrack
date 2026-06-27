@@ -383,7 +383,7 @@ def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
               ("Warehouse Zone A","56 Industrial Area, Muscat",12.618852,75.249893,1000000000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (%s,%s,%s,%s,%s,%s)",
-              ("HR001","Issa al bahlani","hr",_hash("hr123"),"9876543210","Human Resources"))
+              ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
               ("MGR001","Rajesh Kumar","manager",_hash("mgr123"),"9876543211","Operations",1))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
@@ -1641,6 +1641,12 @@ async def _run_scheduled_report(schedule_id: int):
     # ── Deliver ──────────────────────────────────────────────────────────────
     delivered_to = []
     if status == "ok" and report_text:
+
+        # Build recipient phone list:
+        # 1. Start with explicitly stored numbers in the schedule definition
+        # 2. If none stored, auto-resolve from DB based on report scope:
+        #    - site_summary / behaviour  → manager(s) of the target site
+        #    - overtime_risk / full_hr   → all HR users + all site managers
         recipients = sched.get("recipients") or []
         if isinstance(recipients, str):
             try:
@@ -1648,14 +1654,81 @@ async def _run_scheduled_report(schedule_id: int):
             except Exception:
                 recipients = []
 
-        if sched["delivery"] == "whatsapp" and recipients:
-            msg = f"📊 AttendTrack Report — {sched['name']}\n\n{report_text[:1400]}"
-            for phone in recipients:
-                r = send_whatsapp_alert(phone, msg)
-                delivered_to.append({"phone": phone, "sent": r.get("sent", False)})
-        else:
-            print(f"[SCHEDULED REPORT] {sched['name']}\n{report_text}", flush=True)
-            delivered_to.append({"channel": "log", "sent": True})
+        if not recipients:
+            # Auto-resolve from database
+            conn_r = get_db()
+            try:
+                c_r = conn_r.cursor()
+                if report_type in ("site_summary", "behaviour") and site_id:
+                    # Manager(s) assigned to this site
+                    c_r.execute("""SELECT phone FROM users
+                                   WHERE site_id=%s AND role='manager' AND phone IS NOT NULL""",
+                                (site_id,))
+                else:
+                    # HR users + all managers
+                    c_r.execute("""SELECT phone FROM users
+                                   WHERE role IN ('hr','manager') AND phone IS NOT NULL""")
+                rows = c_r.fetchall()
+                recipients = [r["phone"] for r in rows if r["phone"]]
+            except Exception as e:
+                print(f"[REPORT DELIVERY] Failed to auto-resolve recipients: {e}", flush=True)
+            finally:
+                release_db(conn_r)
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_recipients = []
+        for p in recipients:
+            p_clean = str(p).strip()
+            if p_clean and p_clean not in seen:
+                seen.add(p_clean)
+                unique_recipients.append(p_clean)
+
+        report_header = f"📊 *AttendTrack — {sched['name']}*\n"
+        full_msg = report_header + report_text
+
+        # Always log to server console regardless of delivery mode
+        print(f"[SCHEDULED REPORT] {sched['name']} | type={report_type} | ai={ai_used}\n"
+              f"{report_text[:600]}{'...' if len(report_text) > 600 else ''}",
+              flush=True)
+
+        if sched["delivery"] == "whatsapp" and unique_recipients:
+            # Twilio hard limit is 1600 chars per message — split into chunks
+            MAX_CHUNK = 1500
+            lines = full_msg.split("\n")
+            chunks = []
+            current = ""
+            for line in lines:
+                candidate = current + ("\n" if current else "") + line
+                if len(candidate) <= MAX_CHUNK:
+                    current = candidate
+                else:
+                    if current:
+                        chunks.append(current)
+                    # If a single line is itself > MAX_CHUNK, hard-split it
+                    while len(line) > MAX_CHUNK:
+                        chunks.append(line[:MAX_CHUNK])
+                        line = line[MAX_CHUNK:]
+                    current = line
+            if current:
+                chunks.append(current)
+
+            for phone in unique_recipients:
+                phone_ok = True
+                for i, chunk in enumerate(chunks):
+                    prefix = f"[{i+1}/{len(chunks)}] " if len(chunks) > 1 else ""
+                    r = send_whatsapp_alert(phone, prefix + chunk)
+                    if not r.get("sent", False):
+                        phone_ok = False
+                        print(f"[REPORT DELIVERY] WhatsApp send failed to {phone}: {r.get('reason')}", flush=True)
+                delivered_to.append({
+                    "phone": phone,
+                    "sent": phone_ok,
+                    "chunks": len(chunks),
+                })
+        elif sched["delivery"] == "whatsapp" and not unique_recipients:
+            print(f"[REPORT DELIVERY] delivery=whatsapp but no phone numbers resolved — report logged only", flush=True)
+            delivered_to.append({"channel": "log_only", "reason": "no_recipients_found", "sent": False})
 
     # ── Write run log ─────────────────────────────────────────────────────────
     conn3 = get_db()
