@@ -35,9 +35,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 if not DATABASE_URL:
     raise RuntimeError("❌ DATABASE_URL not set in .env file!")
 
+# Add TCP keepalive params so the OS detects dropped Railway connections quickly
+# instead of hanging until a query times out.
+_DSN_EXTRA = "keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
+_dsn = DATABASE_URL + ("&" if "?" in DATABASE_URL else "?") + _DSN_EXTRA
+
 db_pool = pg_pool.ThreadedConnectionPool(
     minconn=2, maxconn=20,
-    dsn=DATABASE_URL,
+    dsn=_dsn,
     cursor_factory=RealDictCursor
 )
 print("✅ PostgreSQL pool ready")
@@ -260,12 +265,41 @@ async def health():
 # DB HELPERS
 # ─────────────────────────────────────────────
 def get_db():
+    """
+    Get a connection from the pool, testing it first.
+    If the connection is stale (Railway dropped it), discard it and
+    open a fresh one — this is the fix for:
+      psycopg2.OperationalError: SSL SYSCALL error: EOF detected
+    """
     conn = db_pool.getconn()
+    try:
+        # Lightweight liveness check — no round-trip to server
+        if conn.closed:
+            raise psycopg2.OperationalError("connection closed")
+        # Try a trivial query; if the TCP connection was silently dropped
+        # this raises OperationalError so we can swap in a fresh connection.
+        conn.cursor().execute("SELECT 1")
+        conn.rollback()   # reset any implicit transaction from the test
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # Connection is dead — discard it and open a brand-new one
+        try:
+            db_pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        conn = psycopg2.connect(dsn=_dsn, cursor_factory=RealDictCursor)
+        print("[DB] Stale pool connection replaced with fresh connection", flush=True)
     conn.autocommit = False
     return conn
 
 def release_db(conn):
-    db_pool.putconn(conn)
+    try:
+        db_pool.putconn(conn)
+    except Exception:
+        # If the conn was created outside the pool (fallback above), just close it
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def init_db():
     conn = get_db()
