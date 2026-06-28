@@ -6,7 +6,7 @@
 <title>AttendTrack — HR Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#06040f;--bg2:#0d0820;--purple:#6c2bd9;--purple-mid:#9b59f5;--purple-light:#c084fc;--violet:#7c3aed;--pink:#e879f9;--green:#4ade80;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--cyan:#22d3ee;--white:#f8f4ff;--white-dim:rgba(248,244,255,.65);--white-faint:rgba(248,244,255,.10);--glow:rgba(124,58,237,.4);--border:rgba(156,84,245,.22);--cyan-glow:rgba(34,211,238,.35)}
+:root{--bg:#06040f;--bg2:#0d0820;--purple:#6c2bd9;--purple-mid:#9b59f5;--purple-light:#c084fc;--violet:#7c3aed;--pink:#e879f9;--green:#4ade80;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--cyan:#22d3ee;--white:#f8f4ff;--white-dim:rgba(248,244,255,.65);--white-faint:rgba(248,244,255,.10);--glow:rgba(124,58,237,.4);--border:rgba(156,84,245,.22);--cyan-glow:rgba(34,211,238,.35);--orange:#ea580c;--gold:#f59e0b;--gold-glow:rgba(245,158,11,.35);--stat-border-radius:16px;}
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box} body{background:var(--bg);color:var(--white);font-family:'DM Sans',sans-serif;min-height:100vh}
 nav{position:fixed;top:0;width:100%;z-index:100;padding:.9rem 1.5rem;display:flex;align-items:center;justify-content:space-between;backdrop-filter:blur(24px);background:rgba(6,4,15,.85);border-bottom:1px solid var(--border)}
 .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.15rem;background:linear-gradient(135deg,var(--purple-light),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent}.nav-right{display:flex;align-items:center;gap:.7rem}.nav-badge{font-size:.68rem;padding:.22rem .7rem;border-radius:100px;border:1px solid rgba(59,130,246,.4);color:var(--blue);text-transform:uppercase;letter-spacing:.05em}.nav-name{font-size:.82rem;color:var(--white-dim)}
@@ -31,6 +31,36 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
 .ai-spinner{width:14px;height:14px;border:2px solid var(--white-faint);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}@keyframes spin{to{transform:rotate(360deg)}}
 .ai-meta{font-size:.68rem;color:var(--cyan);margin-top:.5rem;letter-spacing:.03em;opacity:.85}
 @keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* ── Enhanced stat cards ── */
+.stat-card{
+  border-radius:var(--stat-border-radius);
+  padding:1.1rem 1rem 1rem;
+  border-left:4px solid transparent;
+  position:relative;
+  overflow:hidden;
+  text-align:left;
+  transition:transform .2s, box-shadow .2s;
+}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.35);}
+.stat-card.sc-green{border-left-color:var(--green);}
+.stat-card.sc-amber{border-left-color:var(--amber);}
+.stat-card.sc-red{border-left-color:var(--red);}
+.stat-card.sc-blue{border-left-color:var(--blue);}
+.stat-card.sc-purple{border-left-color:var(--purple-light);}
+.stat-icon{font-size:1.4rem;margin-bottom:.35rem;display:block;line-height:1;}
+.stat-val{font-size:2.6rem!important;line-height:1;}
+.stat-lbl{font-size:.72rem;margin-top:.25rem;letter-spacing:.05em;}
+/* skeleton shimmer */
+.skel{background:linear-gradient(90deg,var(--bg2) 25%,rgba(255,255,255,.04) 50%,var(--bg2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px;}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+/* approve / reject micro-interactions */
+@keyframes flashGreen{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}40%{box-shadow:0 0 0 8px rgba(74,222,128,.5)}}
+@keyframes shakeRed{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+.btn-approve.flash{animation:flashGreen .5s ease;}
+.btn-reject.shake{animation:shakeRed .4s ease;}
+/* count-up animation helper */
+@keyframes countUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.stat-val.animating{animation:countUp .45s cubic-bezier(.16,1,.3,1);}
 </style>
 </head>
 <body>
@@ -39,7 +69,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
   <div class="card">
     <div class="card-title">👔 HR Dashboard</div>
     <div class="card-sub">Human Resources Portal · AttendTrack</div>
-    <div class="demo-chips"><span class="chip" onclick="fillDemo('HR001','hr123')">Issa Al bahlani</span></div>
+    <div class="demo-chips"><span class="chip" onclick="fillDemo('HR001','hr123')">HR001 (demo)</span></div>
     <label>HR Employee ID</label><input id="empId" placeholder="e.g. HR001" autocomplete="off">
     <label>Password</label><input id="pwd" type="password" placeholder="••••••••">
     <button class="btn btn-primary" onclick="doLogin()">Login →</button>
@@ -63,13 +93,13 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
     <div class="page-title">HR <em>Command Centre</em></div>
     <div class="page-sub">All sites · All employees · Real-time attendance</div>
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-val" style="color:var(--green)" id="sToday">–</div><div class="stat-lbl">Today's check-ins</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:var(--amber)" id="sPendingMgr">–</div><div class="stat-lbl">Pending manager</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:var(--red)" id="sPendingHR">–</div><div class="stat-lbl">Pending HR review</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div>
+      <div class="stat-card sc-green"><span class="stat-icon">👷</span><div class="stat-val skel" style="color:var(--green)" id="sToday">–</div><div class="stat-lbl">Today's check-ins</div></div>
+      <div class="stat-card sc-amber"><span class="stat-icon">⏳</span><div class="stat-val skel" style="color:var(--amber)" id="sPendingMgr">–</div><div class="stat-lbl">Pending manager</div></div>
+      <div class="stat-card sc-red"><span class="stat-icon">🔴</span><div class="stat-val skel" style="color:var(--red)" id="sPendingHR">–</div><div class="stat-lbl">Pending HR review</div></div>
+      <div class="stat-card sc-blue"><span class="stat-icon">✅</span><div class="stat-val skel" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div>
+      <div class="stat-card sc-purple"><span class="stat-icon">🏢</span><div class="stat-val skel" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div>
     </div>
-    <div class="refresh-info"><span class="live-dot"></span>Auto-refresh · Last: <span id="lastUpdate">–</span></div>
+    <div class="refresh-info"><span class="live-dot"></span>Auto-refreshes every 30s · Last: <span id="lastUpdate">–</span></div>
     <div class="tabs"></div>
     <div id="filterArea" style="display:none" class="filters">
       <input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()">
@@ -112,7 +142,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
       <label>Delivery</label>
       <select id="srDelivery">
         <option value="log">Log to server</option>
-        <option value="whatsapp">WhatsApp (via Twilio)</option>
+        <option value="whatsapp">WhatsApp (requires Twilio)</option>
       </select>
       <div id="srRecipientsRow" style="display:none">
         <label>Recipient phone numbers (comma-separated)</label>

@@ -214,22 +214,33 @@
   }
 
   function formatStatSummary(summary) {
+    function animateStat(id, value) {
+      const node = el(id);
+      if (!node) return;
+      node.classList.remove('skel');
+      node.textContent = value ?? '–';
+      node.classList.remove('animating');
+      // force reflow then add class for animation
+      void node.offsetWidth;
+      node.classList.add('animating');
+      setTimeout(() => node.classList.remove('animating'), 500);
+    }
     if (portalRole === 'manager') {
-      setText('statToday', summary.today_unique_checkins ?? '–');
-      setText('statPending', summary.pending_count ?? '–');
-      setText('statApproved', summary.approved_count ?? '–');
-      setText('statTotal', summary.total_labours_site ?? '–');
+      animateStat('statToday',   summary.today_unique_checkins ?? '–');
+      animateStat('statPending', summary.pending_count ?? '–');
+      animateStat('statApproved',summary.approved_count ?? '–');
+      animateStat('statTotal',   summary.total_labours_site ?? '–');
       setText('pendingBadge', summary.pending_count ?? '0');
       const pendingBadgeEl = el('pendingBadge');
       if (pendingBadgeEl) pendingBadgeEl.style.display = (summary.pending_count > 0) ? 'inline-block' : 'none';
       const pageSub = el('pageSub');
       if (pageSub) pageSub.textContent = `${state.currentUser?.site_name || 'Your Site'} · ${state.currentUser?.name || ''}`;
     } else {
-      setText('sToday', summary.today_checkins ?? '–');
-      setText('sPendingMgr', summary.pending_manager ?? '–');
-      setText('sPendingHR', summary.pending_hr ?? '–');
-      setText('sApproved', summary.approved_today ?? '–');
-      setText('sTotal', summary.total_employees ?? '–');
+      animateStat('sToday',      summary.today_checkins ?? '–');
+      animateStat('sPendingMgr', summary.pending_manager ?? '–');
+      animateStat('sPendingHR',  summary.pending_hr ?? '–');
+      animateStat('sApproved',   summary.approved_today ?? '–');
+      animateStat('sTotal',      summary.total_employees ?? '–');
       setText('hrBadge', summary.pending_hr ?? '0');
       const hrBadgeEl = el('hrBadge');
       if (hrBadgeEl) hrBadgeEl.style.display = (summary.pending_hr > 0) ? 'inline-block' : 'none';
@@ -374,18 +385,41 @@
     const present = analyses.filter((entry) => entry.present).length;
     const total = analyses.length;
 
+    // Build per-site summary cards (HR only)
+    let siteSummaryHtml = '';
+    if (portalRole === 'hr' && state.siteList.length) {
+      const siteCards = state.siteList.map((site) => {
+        const siteRecords = state.allRecords.filter((r) => r.site_name === site.name);
+        const siteEmployees = state.employees.filter((e) => e.site_name === site.name && e.role === 'labour');
+        const presentToday = siteRecords.filter((r) => sameDay(r.date)).length;
+        const pending = siteRecords.filter((r) => r.status === 'pending_manager' || r.status === 'pending_hr').length;
+        const otRisk = analyses.filter((a) => a.site_name === site.name && a.projected > OT_CAP).length;
+        const totalSite = siteEmployees.length;
+        const attendPct = totalSite > 0 ? Math.round((presentToday / totalSite) * 100) : 0;
+        const barColor = attendPct >= 80 ? 'var(--green)' : attendPct >= 50 ? 'var(--amber)' : 'var(--red)';
+        return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:1rem;border-left:4px solid var(--amber)">
+          <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;margin-bottom:.5rem">🏗️ ${escapeHtml(site.name)}</div>
+          <div style="display:flex;gap:1rem;font-size:.78rem;color:var(--white-dim);margin-bottom:.55rem">
+            <span>👷 <strong style="color:var(--white)">${presentToday}</strong> present</span>
+            <span>⏳ <strong style="color:${pending > 0 ? 'var(--amber)' : 'var(--white)'}">${pending}</strong> pending</span>
+            <span>⚠️ <strong style="color:${otRisk > 0 ? 'var(--red)' : 'var(--white)'}">${otRisk}</strong> OT risk</span>
+          </div>
+          <div style="height:6px;background:var(--white-faint);border-radius:999px;overflow:hidden">
+            <div style="width:${attendPct}%;height:100%;background:${barColor};border-radius:999px;transition:width .6s ease"></div>
+          </div>
+          <div style="font-size:.68rem;color:var(--white-dim);margin-top:.3rem">${attendPct}% attendance today · ${totalSite} total</div>
+        </div>`;
+      });
+      siteSummaryHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;margin-bottom:1.2rem">${siteCards.join('')}</div>`;
+    }
+
     const html = [
-      renderBanner(
-        portalRole === 'manager' ? 'Live site snapshot' : 'Portfolio snapshot',
-        portalRole === 'manager'
-          ? 'The dashboard combines current approvals, overtime pace and behaviour flags so the site manager can act quickly.'
-          : 'HR can review all sites together with pending approvals, attendance pace and exception patterns.'
-      ),
+      siteSummaryHtml,
       `<div class="stats-grid" style="margin-bottom:1rem">`
-        + `<div class="stat-card"><div class="stat-val green">${present}</div><div class="stat-lbl">Present in scope</div></div>`
-        + `<div class="stat-card"><div class="stat-val amber">${summary.pending_count ?? summary.pending_hr ?? summary.pending_manager ?? 0}</div><div class="stat-lbl">Pending approvals</div></div>`
-        + `<div class="stat-card"><div class="stat-val blue">${analyses.filter((entry) => entry.projected > OT_CAP).length}</div><div class="stat-lbl">Predicted breaches</div></div>`
-        + `<div class="stat-card"><div class="stat-val" style="color:var(--purple-light)">${total}</div><div class="stat-lbl">Employees in scope</div></div>`
+        + `<div class="stat-card sc-green"><span class="stat-icon">👷</span><div class="stat-val green">${present}</div><div class="stat-lbl">Present in scope</div></div>`
+        + `<div class="stat-card sc-amber"><span class="stat-icon">⏳</span><div class="stat-val amber">${summary.pending_count ?? summary.pending_hr ?? summary.pending_manager ?? 0}</div><div class="stat-lbl">Pending approvals</div></div>`
+        + `<div class="stat-card sc-red"><span class="stat-icon">⚠️</span><div class="stat-val" style="color:var(--red)">${analyses.filter((entry) => entry.projected > OT_CAP).length}</div><div class="stat-lbl">Predicted breaches</div></div>`
+        + `<div class="stat-card sc-purple"><span class="stat-icon">🏢</span><div class="stat-val" style="color:var(--purple-light)">${total}</div><div class="stat-lbl">Employees in scope</div></div>`
       + `</div>`,
       `<div class="rec-card"><div class="rec-head"><div><div class="rec-name">Top alerts right now</div><div class="rec-meta">Raised automatically from live attendance data</div></div></div>`,
       topAlerts.length ? topAlerts.map((entry) => {
@@ -417,8 +451,8 @@
           <div class="rec-times">📅 ${escapeHtml(record.date)} · In: ${escapeHtml(timeOnly(record.login_time))} → Out: ${escapeHtml(timeOnly(record.logout_time))} · <strong>${Number(record.hours_worked || 0).toFixed(1)}h</strong></div>
           <div class="rec-actions">
             <input placeholder="Note (optional)" id="note${record.id}">
-            <button class="btn-approve" onclick="verify(${record.id}, true)">✓ Approve</button>
-            <button class="btn-reject" onclick="verify(${record.id}, false)">✗ Reject</button>
+            <button class="btn-approve" onclick="this.classList.add('flash');setTimeout(()=>this.classList.remove('flash'),600);verify(${record.id}, true)">✓ Approve</button>
+            <button class="btn-reject" onclick="this.classList.add('shake');setTimeout(()=>this.classList.remove('shake'),500);verify(${record.id}, false)">✗ Reject</button>
           </div>
         </div>`;
     }).join('');
@@ -457,15 +491,39 @@
       setHtml('recList', '<div class="empty">No employees found</div>');
       return;
     }
+    // Build a quick lookup: employee_id → today's status
+    const todayStatus = new Map();
+    state.allRecords.forEach((record) => {
+      if (sameDay(record.date)) {
+        todayStatus.set(record.employee_id, record.status);
+      }
+    });
+
+    const ringColor = (empId) => {
+      const s = todayStatus.get(empId);
+      if (!s) return '#444';
+      if (s === 'active') return 'var(--green)';
+      if (s === 'approved') return 'var(--blue)';
+      if (s === 'rejected') return 'var(--red)';
+      return 'var(--amber)'; // pending_manager / pending_hr
+    };
+
     const html = [`
       <div class="emp-grid">
         ${state.employees.map((employee) => {
           const faceClass = employee.face_registered ? 'face-yes' : 'face-no';
           const faceLabel = employee.face_registered ? 'Face enrolled' : 'Face not registered';
+          const ring = ringColor(employee.employee_id);
+          const initial = (employee.name || '?')[0].toUpperCase();
           return `
-            <div class="emp-card">
-              <div class="emp-name">${escapeHtml(employee.name)}</div>
-              <div class="emp-id">${escapeHtml(employee.employee_id)}</div>
+            <div class="emp-card" style="position:relative">
+              <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.55rem">
+                <div style="width:36px;height:36px;border-radius:50%;background:var(--bg);border:2.5px solid ${ring};display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem;flex-shrink:0;color:${ring}">${escapeHtml(initial)}</div>
+                <div>
+                  <div class="emp-name">${escapeHtml(employee.name)}</div>
+                  <div class="emp-id">${escapeHtml(employee.employee_id)}</div>
+                </div>
+              </div>
               <div class="emp-meta">${escapeHtml(employee.role || 'labour')} · ${escapeHtml(employee.phone || '–')}</div>
               <div class="emp-meta">${escapeHtml(employee.department || '–')}</div>
               <div class="emp-meta">${escapeHtml(employee.site_name || 'Unassigned site')}</div>

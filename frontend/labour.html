@@ -88,6 +88,19 @@ input:focus{border-color:var(--purple-light)}
 .demo-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:1rem;justify-content:center}
 .chip{font-size:.67rem;padding:.2rem .6rem;border:1px solid var(--border);border-radius:100px;color:var(--white-dim);cursor:pointer;background:var(--white-faint)}
 .chip:hover{border-color:var(--purple-light);color:var(--purple-light)}
+/* ── Mobile-first labour portal enhancements ── */
+.btn-green{padding:1rem;font-size:1rem;letter-spacing:.03em;border-radius:16px;box-shadow:0 0 36px rgba(74,222,128,.4),0 4px 12px rgba(0,0,0,.3);}
+.btn-red{padding:1rem;font-size:1rem;letter-spacing:.03em;border-radius:16px;box-shadow:0 0 36px rgba(239,68,68,.4),0 4px 12px rgba(0,0,0,.3);}
+.btn-green:active,.btn-red:active{transform:scale(.97);}
+.live-clock{font-family:'Syne',sans-serif;font-size:1.5rem;font-weight:800;text-align:center;color:var(--white);letter-spacing:.1em;margin-bottom:.3rem;}
+.site-badge{display:inline-flex;align-items:center;gap:.35rem;background:rgba(124,58,237,.12);border:1px solid var(--border);border-radius:100px;padding:.28rem .75rem;font-size:.72rem;color:var(--purple-light);font-weight:600;margin-bottom:.75rem;}
+.status-card{transition:background .4s, border-color .4s;}
+/* history rows enhanced */
+.hist-row{transition:background .2s;}
+.hist-row:hover{background:rgba(255,255,255,.04);}
+/* Q&A chips scroll on mobile */
+#qaChips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:.3rem;-webkit-overflow-scrolling:touch;}
+#qaChips::-webkit-scrollbar{display:none;}
 </style>
 </head>
 <body>
@@ -184,6 +197,12 @@ input:focus{border-color:var(--purple-light)}
         <div class="user-meta" id="dashMeta">–</div>
       </div>
       <button class="btn btn-secondary" style="width:auto;padding:.35rem .9rem;font-size:.75rem;margin:0 0 0 auto" onclick="logout()">Logout</button>
+    </div>
+
+    <!-- Live clock + site indicator -->
+    <div style="text-align:center;margin-bottom:.8rem">
+      <div class="live-clock" id="liveClock">00:00</div>
+      <div id="siteBadgeWrap"></div>
     </div>
 
     <!-- Status card -->
@@ -595,7 +614,17 @@ async function askQuestion() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Request failed');
 
-    ansText.textContent = data.answer;
+    // Typewriter reveal
+    ansText.textContent = '';
+    const chars = data.answer.split('');
+    let ci = 0;
+    const tw = setInterval(() => {
+      if (ci < chars.length) {
+        ansText.textContent += chars[ci++];
+      } else {
+        clearInterval(tw);
+      }
+    }, 12);
     ansMeta.textContent = data.ai_used
       ? `✨ AI-powered · ${data.context?.month_hours ?? '?'}h worked this month`
       : '⚠️ AI unavailable — answer based on policy text only';
@@ -647,6 +676,33 @@ function escHtml(v) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ─── LIVE CLOCK ───
+function startLiveClock() {
+  function tick() {
+    const now = new Date();
+    const t = now.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+    const el = document.getElementById('liveClock');
+    if (el) el.textContent = t;
+  }
+  tick();
+  setInterval(tick, 1000);
+}
+startLiveClock();
+
+// ─── SITE BADGE (populated when user logs in) ───
+function updateSiteBadge() {
+  const wrap = document.getElementById('siteBadgeWrap');
+  if (wrap && currentUser && currentUser.site_name) {
+    wrap.innerHTML = `<span class="site-badge">🏗️ ${currentUser.site_name}</span>`;
+  }
+}
+// Hook into enterDashboard — call updateSiteBadge after existing code
+const _origEnterDashboard = enterDashboard;
+enterDashboard = function() {
+  _origEnterDashboard();
+  updateSiteBadge();
+};
 </script>
 </body>
 </html>
