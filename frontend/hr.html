@@ -39,7 +39,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
   <div class="card">
     <div class="card-title">👔 HR Dashboard</div>
     <div class="card-sub">Human Resources Portal · AttendTrack</div>
-    <div class="demo-chips"><span class="chip" onclick="fillDemo('HR001','hr123')">HR001 (demo)</span></div>
+    <div class="demo-chips"><span class="chip" onclick="fillDemo('HR001','hr123')">Issa Al bahlani</span></div>
     <label>HR Employee ID</label><input id="empId" placeholder="e.g. HR001" autocomplete="off">
     <label>Password</label><input id="pwd" type="password" placeholder="••••••••">
     <button class="btn btn-primary" onclick="doLogin()">Login →</button>
@@ -69,7 +69,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
       <div class="stat-card"><div class="stat-val" style="color:var(--blue)" id="sApproved">–</div><div class="stat-lbl">Approved today</div></div>
       <div class="stat-card"><div class="stat-val" style="color:var(--purple-light)" id="sTotal">–</div><div class="stat-lbl">Total labours</div></div>
     </div>
-    <div class="refresh-info"><span class="live-dot"></span>Auto-refreshes every 30s · Last: <span id="lastUpdate">–</span></div>
+    <div class="refresh-info"><span class="live-dot"></span>Auto-refresh · Last: <span id="lastUpdate">–</span></div>
     <div class="tabs"></div>
     <div id="filterArea" style="display:none" class="filters">
       <input type="date" id="filterDate" placeholder="Filter by date" onchange="loadAll()">
@@ -112,7 +112,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
       <label>Delivery</label>
       <select id="srDelivery">
         <option value="log">Log to server</option>
-        <option value="whatsapp">WhatsApp (requires Twilio)</option>
+        <option value="whatsapp">WhatsApp (via Twilio)</option>
       </select>
       <div id="srRecipientsRow" style="display:none">
         <label>Recipient phone numbers (comma-separated)</label>
