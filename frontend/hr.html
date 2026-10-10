@@ -217,7 +217,7 @@ label{font-size:.7rem;color:var(--purple-light);letter-spacing:.06em;text-transf
 <script src="portal.js"></script>
 <script>
 // ─── HR INTELLIGENCE — all logic self-contained ───────────────────────────
-const API_BASE = (window.ATTENDTRACK_API || 'https://attendtrack-production-39c3.up.railway.app').replace(/\/$/, '');
+const API_BASE = (window.ATTENDTRACK_API || 'https://attendtrack-api-production.up.railway.app/manager').replace(/\/$/, '');
 function escH(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 // open/close — FAB triggers openHrIntelligence(); portal.js stubs openAiSheet/closeAiSheet
