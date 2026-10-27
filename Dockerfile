@@ -42,9 +42,22 @@ RUN pip install --no-cache-dir \
     pandas==2.2.2 \
     openpyxl==3.1.2
 
+# Redis async client + WebSocket support
+RUN pip install --no-cache-dir \
+    redis==5.0.4 \
+    websockets==12.0
+
+# JWT auth + bcrypt password hashing
+RUN pip install --no-cache-dir \
+    "python-jose[cryptography]==3.3.0" \
+    "passlib[bcrypt]==1.7.4"
+
 COPY . .
 
 ENV PORT=8000
+# WORKERS env var controls uvicorn workers (set to 1 when behind Nginx+docker-compose;
+# increase for Railway single-container deploys: e.g. WORKERS=4)
+ENV WORKERS=1
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT --workers ${WORKERS:-1}"]

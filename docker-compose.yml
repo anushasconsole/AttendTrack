@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AttendTrack — Production Docker Compose
+#
+# Services:
+#   redis   — Rate limiting, distributed locks, WebSocket pub/sub
+#   app     — FastAPI + uvicorn workers (scale with --scale app=N)
+#   nginx   — Reverse proxy, load balancer, rate limiting at the edge
+#
+# Usage:
+#   Single instance:       docker-compose up
+#   Multi-worker (4):      docker-compose up --scale app=4
+#   Background:            docker-compose up -d --scale app=4
+#
+# Required .env variables:
+#   DATABASE_URL   — PostgreSQL connection string
+#   REDIS_URL      — Automatically set to redis://redis:6379/0
+#   AI_API_KEY     — Groq or OpenRouter API key
+#   AI_PROVIDER    — groq | openrouter  (default: groq)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    ports:
+      - "6379:6379"          # expose for local debugging; remove in prod
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - attendtrack
+
+  # ── FastAPI application workers ───────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_PROVIDER=${AI_PROVIDER:-groq}
+      - AI_MODEL=${AI_MODEL:-}
+      - OVERTIME_LIMIT_HOURS=${OVERTIME_LIMIT_HOURS:-105}
+      - OVERTIME_WARN_AT=${OVERTIME_WARN_AT:-0.9}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_WHATSAPP_FROM=${TWILIO_WHATSAPP_FROM:-}
+      - WHATSAPP_DEFAULT_CC=${WHATSAPP_DEFAULT_CC:-+91}
+      # JWT auth — generate with: python -c "import secrets; print(secrets.token_hex(32))"
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-CHANGE_ME_in_production_use_random_32chars}
+      - JWT_EXPIRE_HOURS=${JWT_EXPIRE_HOURS:-24}
+      # Uvicorn: single worker per container — Nginx load-balances across containers
+      - WORKERS=1
+    expose:
+      - "8000"               # internal only — Nginx fronts it
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attendtrack
+    # No port mapping here — all traffic goes through Nginx
+
+  # ── Nginx reverse proxy / load balancer ───────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"              # public HTTP port
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - attendtrack
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  attendtrack:
+    driver: bridge

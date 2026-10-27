@@ -1,13 +1,24 @@
 import os, json, math, hashlib, base64, io, asyncio
-from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+
+# ─────────────────────────────────────────────
+# AUTH — JWT + bcrypt  (must load before app is created)
+# ─────────────────────────────────────────────
+from auth import (
+    hash_password, verify_password,
+    create_access_token,
+    blacklist_token,
+    get_current_user, require_labour, require_manager, require_hr, require_manager_or_hr,
+    TokenData, JWT_EXPIRE_HOURS,
+)
 
 load_dotenv()
 
@@ -119,6 +130,17 @@ except Exception as _ml_err:
     print(f"⚠️  ml_engine not loaded: {_ml_err}")
 
 # ─────────────────────────────────────────────
+# REDIS — distributed locking, rate limiting, WebSocket pub/sub
+# ─────────────────────────────────────────────
+from redis_layer import (
+    get_redis, close_redis,
+    RedisLock, RateLimiter,
+    ws_register, ws_unregister, publish_event, subscribe_loop,
+    REDIS_READY,
+)
+print(f"✅ redis_layer imported — Redis {'ENABLED' if REDIS_READY else 'DISABLED (no-op mode)'}")
+
+# ─────────────────────────────────────────────
 # SCHEDULER — APScheduler for automatic reports
 # ─────────────────────────────────────────────
 SCHEDULER_READY = False
@@ -132,11 +154,16 @@ except ImportError:
     print("⚠️  apscheduler not installed — scheduled reports disabled (pip install apscheduler)")
 
 # ─────────────────────────────────────────────
-# APP LIFESPAN — starts scheduler on boot, stops cleanly on shutdown
+# APP LIFESPAN — starts scheduler, Redis subscriber on boot
 # ─────────────────────────────────────────────
+_pubsub_task = None
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _scheduler
+    global _scheduler, _pubsub_task
+    # Redis pub/sub subscriber — one per worker process
+    _pubsub_task = asyncio.create_task(subscribe_loop())
+
     if SCHEDULER_READY:
         _scheduler = AsyncIOScheduler()
         # Boot all persisted schedules from DB
@@ -144,6 +171,10 @@ async def lifespan(application: FastAPI):
         _scheduler.start()
         print("✅ Scheduler started")
     yield
+    # Shutdown
+    if _pubsub_task and not _pubsub_task.done():
+        _pubsub_task.cancel()
+    await close_redis()
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
         print("Scheduler stopped")
@@ -259,7 +290,112 @@ async def legacy_portal_js():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "face_ready": FACE_READY, "db": "postgresql"}
+    r = await get_redis()
+    redis_ok = False
+    if r:
+        try:
+            await r.ping()
+            redis_ok = True
+        except Exception:
+            pass
+    return {
+        "status": "ok",
+        "face_ready": FACE_READY,
+        "face_bypass": not FACE_READY,
+        "db": "postgresql",
+        "redis": "connected" if redis_ok else ("not_configured" if not REDIS_READY else "unreachable"),
+        "ml_engine": ML_ENGINE_READY,
+        "ai_ready": AI_READY,
+        "scheduler": SCHEDULER_READY,
+    }
+
+# ─────────────────────────────────────────────
+# WEBSOCKET — real-time attendance updates
+# ─────────────────────────────────────────────
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket connection per user.  user_id can be:
+      - An employee_id      (e.g. "LAB001")   → receives their own status updates
+      - "site:<site_id>"    (e.g. "site:1")   → manager channel for a site
+      - "hr:broadcast"                         → all-HR broadcast channel
+
+    On connect the client MUST send: {"auth": "<bearer_token>"}
+    The server validates the JWT and rejects unauthenticated connections.
+
+    On attendance status change the server pushes:
+      {"type":"attendance_update","attendance_id":42,"employee_id":"LAB001",
+       "status":"pending_hr","updated_by_role":"manager","timestamp":"..."}
+    """
+    await websocket.accept()
+
+    # ── JWT validation on connect ────────────────────────────────────────────
+    try:
+        auth_msg = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        auth_data = json.loads(auth_msg)
+        token = auth_data.get("auth", "")
+        if not token:
+            await websocket.send_text(json.dumps({"type": "error", "message": "auth token required"}))
+            await websocket.close(code=4001)
+            return
+        from auth import _decode_token, _is_blacklisted
+        payload = _decode_token(token)
+        jti = payload.get("jti", "")
+        if jti and await _is_blacklisted(jti):
+            await websocket.send_text(json.dumps({"type": "error", "message": "token revoked"}))
+            await websocket.close(code=4001)
+            return
+        # Confirm connection
+        await websocket.send_text(json.dumps({"type": "connected", "user_id": user_id}))
+    except asyncio.TimeoutError:
+        await websocket.close(code=4002)
+        return
+    except Exception:
+        await websocket.close(code=4003)
+        return
+
+    await ws_register(user_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws_unregister(user_id, websocket)
+
+# ─────────────────────────────────────────────
+# AUDIT LOG — HR/admin read access
+# ─────────────────────────────────────────────
+@app.get("/api/audit-log")
+async def get_audit_log(hr_id: str, limit: int = 100, offset: int = 0,
+                        actor_id: str = None, target_id: str = None,
+                        action: str = None,
+                        current: TokenData = Depends(require_hr)):
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        _assert_hr(c, hr_id)
+        q = "SELECT * FROM audit_log WHERE 1=1"
+        p: list = []
+        if actor_id:  q += " AND actor_id=%s";  p.append(actor_id.upper())
+        if target_id: q += " AND target_id=%s"; p.append(target_id)
+        if action:    q += " AND action=%s";     p.append(action)
+        q += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        p += [min(limit, 500), offset]
+        c.execute(q, p)
+        rows = c.fetchall()
+        c.execute("SELECT COUNT(*) as cnt FROM audit_log")
+        total = c.fetchone()["cnt"]
+    finally:
+        release_db(conn)
+    return {"total": total, "limit": limit, "offset": offset,
+            "entries": [dict(r) for r in rows]}
 
 # ─────────────────────────────────────────────
 # DB HELPERS
@@ -406,6 +542,20 @@ def init_db():
             answer              TEXT NOT NULL,
             created_at          TIMESTAMP DEFAULT NOW()
         )""")
+        # ── Audit log — records every status-changing action ───────────────
+        c.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+            id           SERIAL PRIMARY KEY,
+            action       TEXT NOT NULL,
+            actor_id     TEXT NOT NULL,
+            actor_role   TEXT NOT NULL,
+            target_id    TEXT,
+            target_type  TEXT,
+            old_value    TEXT,
+            new_value    TEXT,
+            metadata     JSONB DEFAULT '{}',
+            ip_address   TEXT,
+            created_at   TIMESTAMP DEFAULT NOW()
+        )""")
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_att_emp_date  ON attendance(employee_id, date DESC)",
             "CREATE INDEX IF NOT EXISTS idx_att_site_date ON attendance(site_id, date DESC)",
@@ -415,6 +565,11 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_qa_emp        ON employee_qa(employee_id, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_rpt_runs      ON report_runs(schedule_id, ran_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_hr_qa         ON hr_qa(hr_id, created_at DESC)",
+            # ── New indexes for 3k+ employee queries ──────────────────────
+            "CREATE INDEX IF NOT EXISTS idx_users_role    ON users(role)",
+            "CREATE INDEX IF NOT EXISTS idx_users_site    ON users(site_id)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_actor   ON audit_log(actor_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_target  ON audit_log(target_id, created_at DESC)",
         ]:
             c.execute(idx)
         conn.commit()
@@ -428,19 +583,17 @@ def init_db():
     finally:
         release_db(conn)
 
-def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
-
 def _seed(c):
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
               ("Main Construction Site","Vijayanagar, Bangalore",12.618852,75.249893,1000000000))
     c.execute("INSERT INTO sites (name,address,latitude,longitude,radius_meters) VALUES (%s,%s,%s,%s,%s)",
               ("Warehouse Zone A","56 Industrial Area, Muscat",12.618852,75.249893,1000000000))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department) VALUES (%s,%s,%s,%s,%s,%s)",
-              ("HR001","Priya Sharma","hr",_hash("hr123"),"9876543210","Human Resources"))
+              ("HR001","Priya Sharma","hr",hash_password("hr123"),"9876543210","Human Resources"))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-              ("MGR001","Rajesh Kumar","manager",_hash("mgr123"),"9876543211","Operations",1))
+              ("MGR001","Rajesh Kumar","manager",hash_password("mgr123"),"9876543211","Operations",1))
     c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-              ("MGR002","Suresh Nair","manager",_hash("mgr456"),"9876543212","Operations",2))
+              ("MGR002","Suresh Nair","manager",hash_password("mgr456"),"9876543212","Operations",2))
     for eid,name,site,phone in [
         ("LAB001","Prashanth Kumar",1,"9876543213"),
         ("LAB002","Pranav Das",1,"9876543214"),
@@ -448,8 +601,8 @@ def _seed(c):
         ("LAB004","Mohan Kumar",2,"9876543216"),
     ]:
         c.execute("INSERT INTO users (employee_id,name,role,password_hash,phone,department,site_id) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                  (eid,name,"labour",_hash("lab123"),phone,"Labour",site))
-    print("✅ Demo data seeded")
+                  (eid,name,"labour",hash_password("lab123"),phone,"Labour",site))
+    print("✅ Demo data seeded (bcrypt passwords)")
 
 init_db()
 
@@ -469,6 +622,35 @@ def calc_hours(login, logout) -> float:
         if not isinstance(logout, datetime): logout = datetime.fromisoformat(str(logout)[:19])
         return round((logout-login).total_seconds()/3600, 2)
     except: return 0.0
+
+# ─────────────────────────────────────────────
+# AUDIT LOG WRITER
+# ─────────────────────────────────────────────
+def write_audit(c, action: str, actor_id: str, actor_role: str,
+                target_id: str = None, target_type: str = None,
+                old_value: str = None, new_value: str = None,
+                metadata: dict = None, ip_address: str = None):
+    """
+    Appends one row to audit_log.  Call inside any open transaction
+    so the audit record and the business change commit atomically.
+    """
+    c.execute(
+        """INSERT INTO audit_log
+               (action, actor_id, actor_role, target_id, target_type,
+                old_value, new_value, metadata, ip_address)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (action, actor_id, actor_role, target_id, target_type,
+         old_value, new_value,
+         json.dumps(metadata or {}),
+         ip_address)
+    )
+
+# ─────────────────────────────────────────────
+# RATE LIMITER — module-level helper (instantiated after Redis init)
+# ─────────────────────────────────────────────
+async def _get_rate_limiter() -> RateLimiter:
+    r = await get_redis()
+    return RateLimiter(r)  # RateLimiter handles r=None as no-op
 
 # ─────────────────────────────────────────────
 # OVERTIME CHECK — runs after every checkout
@@ -653,21 +835,60 @@ class ScheduleReportReq(BaseModel):
 # LOGIN
 # ─────────────────────────────────────────────
 @app.post("/api/login")
-async def login(req: LoginReq):
+async def login(req: LoginReq, request: Request):
+    # Rate limit: 10 attempts per IP per 60s
+    rl = await _get_rate_limiter()
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    try:
+        await rl.check("login", client_ip)
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
+
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("""SELECT u.*, s.name as site_name, s.latitude, s.longitude, s.radius_meters
                      FROM users u LEFT JOIN sites s ON u.site_id=s.id
-                     WHERE u.employee_id=%s AND u.password_hash=%s""",
-                  (req.employee_id.upper(), _hash(req.password)))
+                     WHERE u.employee_id=%s""",
+                  (req.employee_id.upper(),))
         user = c.fetchone()
+
+        if not user:
+            raise HTTPException(401, "Invalid employee ID or password")
+
+        ok, new_hash = verify_password(req.password, user["password_hash"])
+        if not ok:
+            raise HTTPException(401, "Invalid employee ID or password")
+
+        # ── On-the-fly bcrypt migration ──────────────────────────────────────
+        # If the stored hash was legacy SHA-256, upgrade it to bcrypt now
+        if new_hash:
+            c.execute("UPDATE users SET password_hash=%s WHERE employee_id=%s",
+                      (new_hash, user["employee_id"]))
+            print(f"[AUTH] Migrated password hash for {user['employee_id']} from SHA-256 → bcrypt", flush=True)
+
+        write_audit(c, "login", user["employee_id"], user["role"], ip_address=client_ip)
+        conn.commit()
+    except HTTPException:
+        conn.rollback(); raise
+    except Exception as e:
+        conn.rollback(); raise HTTPException(500, str(e))
     finally:
         release_db(conn)
-    if not user:
-        raise HTTPException(401, "Invalid employee ID or password")
+
+    # Issue JWT
+    token = create_access_token(
+        employee_id=user["employee_id"],
+        role=user["role"],
+        name=user["name"],
+        site_id=user["site_id"],
+    )
+
     return {
         "success": True,
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in_hours": JWT_EXPIRE_HOURS,
         "requires_face_verify": user["role"] == "labour",
         "face_registered": bool(user["face_registered"]),
         "user": {
@@ -679,11 +900,40 @@ async def login(req: LoginReq):
         }
     }
 
+
+# ─────────────────────────────────────────────
+# LOGOUT — blacklists the token in Redis
+# ─────────────────────────────────────────────
+@app.post("/api/logout")
+async def logout(current: TokenData = Depends(get_current_user)):
+    """
+    Invalidates the current JWT by adding its jti to the Redis blacklist.
+    The token will be rejected by get_current_user() for all future requests
+    until it would have naturally expired.
+    """
+    if current.jti:
+        # Store blacklist entry for remaining token lifetime
+        ttl = JWT_EXPIRE_HOURS * 3600
+        await blacklist_token(current.jti, ttl)
+    return {"success": True, "message": "Logged out successfully"}
+
 # ─────────────────────────────────────────────
 # FACE REGISTER
 # ─────────────────────────────────────────────
 @app.post("/api/face/register")
-async def face_register(req: FaceRegisterReq):
+async def face_register(req: FaceRegisterReq, request: Request,
+                        current: TokenData = Depends(require_labour)):
+    # Rate limit: 3 attempts per employee per 5 minutes
+    rl = await _get_rate_limiter()
+    try:
+        await rl.check("face_register", req.employee_id.upper())
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
+
+    # Ensure the token belongs to the employee making the request
+    if current.employee_id != req.employee_id.upper():
+        raise HTTPException(403, "You can only register your own face")
+
     conn = get_db()
     try:
         c = conn.cursor()
@@ -692,7 +942,12 @@ async def face_register(req: FaceRegisterReq):
         user = c.fetchone()
         if not user:                         raise HTTPException(404, "Employee not found")
         if user["role"] != "labour":         raise HTTPException(403, "Only for labour accounts")
-        if _hash(req.password) != user["password_hash"]: raise HTTPException(401, "Incorrect password")
+        # Re-verify password as a second factor for face registration
+        ok, new_hash = verify_password(req.password, user["password_hash"])
+        if not ok:                           raise HTTPException(401, "Incorrect password")
+        if new_hash:
+            c.execute("UPDATE users SET password_hash=%s WHERE employee_id=%s",
+                      (new_hash, req.employee_id.upper()))
         if not req.face_image or len(req.face_image) < 100: raise HTTPException(400, "Invalid image")
 
         embedding = extract_embedding(req.face_image)
@@ -702,6 +957,9 @@ async def face_register(req: FaceRegisterReq):
         c.execute("""UPDATE users SET face_embedding=%s, face_registered=TRUE, face_registered_at=NOW()
                      WHERE employee_id=%s""",
                   (json.dumps(embedding) if embedding else None, req.employee_id.upper()))
+        write_audit(c, "face_register", req.employee_id.upper(), "labour",
+                    target_id=req.employee_id.upper(), target_type="user",
+                    new_value="face_registered=true")
         conn.commit()
     except HTTPException:
         conn.rollback(); raise
@@ -715,7 +973,18 @@ async def face_register(req: FaceRegisterReq):
 # FACE VERIFY
 # ─────────────────────────────────────────────
 @app.post("/api/face/verify")
-async def face_verify(req: FaceVerifyReq):
+async def face_verify(req: FaceVerifyReq, request: Request,
+                      current: TokenData = Depends(require_labour)):
+    # Rate limit: 5 attempts per employee per 60s
+    rl = await _get_rate_limiter()
+    try:
+        await rl.check("face_verify", req.employee_id.upper())
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
+
+    if current.employee_id != req.employee_id.upper():
+        raise HTTPException(403, "You can only verify your own face")
+
     conn = get_db()
     try:
         c = conn.cursor()
@@ -749,38 +1018,73 @@ async def face_verify(req: FaceVerifyReq):
 # CHECKIN
 # ─────────────────────────────────────────────
 @app.post("/api/checkin")
-async def checkin(req: CheckinReq):
-    conn = get_db()
+async def checkin(req: CheckinReq, request: Request,
+                  current: TokenData = Depends(require_labour)):
+    # Ensure token owner matches request body
+    if current.employee_id != req.employee_id.upper():
+        raise HTTPException(403, "You can only check in for yourself")
+
+    # Rate limit: 3 checkin calls per employee per 60s
+    rl = await _get_rate_limiter()
     try:
-        c = conn.cursor()
-        c.execute("""SELECT u.*, s.latitude as slat, s.longitude as slng,
-                            s.radius_meters as srad, s.id as sid
-                     FROM users u JOIN sites s ON u.site_id=s.id WHERE u.employee_id=%s""",
-                  (req.employee_id,))
-        user = c.fetchone()
-        if not user: raise HTTPException(404, "Employee not found or no site assigned")
+        await rl.check("checkin", req.employee_id.upper())
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        c.execute("SELECT id FROM attendance WHERE employee_id=%s AND date=%s", (req.employee_id, today))
-        if c.fetchone():
-            raise HTTPException(400, "Already checked in today. Only one check-in per day allowed.")
+    # Distributed lock — prevents duplicate checkin if two requests arrive
+    # simultaneously (e.g. double-tap on mobile or multi-worker race).
+    r = await get_redis()
+    try:
+        async with RedisLock(r, f"checkin:{req.employee_id.upper()}", ttl=15):
+            conn = get_db()
+            try:
+                c = conn.cursor()
+                c.execute("""SELECT u.*, s.latitude as slat, s.longitude as slng,
+                                    s.radius_meters as srad, s.id as sid
+                             FROM users u JOIN sites s ON u.site_id=s.id WHERE u.employee_id=%s""",
+                          (req.employee_id,))
+                user = c.fetchone()
+                if not user: raise HTTPException(404, "Employee not found or no site assigned")
 
-        dist = haversine(req.latitude, req.longitude, user["slat"], user["slng"])
-        if dist > user["srad"]:
-            raise HTTPException(400, f"You are {int(dist)}m from site. Must be within {int(user['srad'])}m.")
+                today = datetime.now().strftime("%Y-%m-%d")
+                c.execute("SELECT id FROM attendance WHERE employee_id=%s AND date=%s", (req.employee_id, today))
+                if c.fetchone():
+                    raise HTTPException(400, "Already checked in today. Only one check-in per day allowed.")
 
-        now = datetime.now()
-        c.execute("""INSERT INTO attendance (employee_id,site_id,login_time,login_lat,login_lng,date,status)
-                     VALUES (%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
-                  (req.employee_id, user["sid"], now, req.latitude, req.longitude, today))
-        att_id = c.fetchone()["id"]
-        conn.commit()
-    except HTTPException:
-        conn.rollback(); raise
-    except Exception as e:
-        conn.rollback(); raise HTTPException(500, str(e))
-    finally:
-        release_db(conn)
+                dist = haversine(req.latitude, req.longitude, user["slat"], user["slng"])
+                if dist > user["srad"]:
+                    raise HTTPException(400, f"You are {int(dist)}m from site. Must be within {int(user['srad'])}m.")
+
+                now = datetime.now()
+                c.execute("""INSERT INTO attendance (employee_id,site_id,login_time,login_lat,login_lng,date,status)
+                             VALUES (%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
+                          (req.employee_id, user["sid"], now, req.latitude, req.longitude, today))
+                att_id = c.fetchone()["id"]
+                write_audit(c, "checkin", req.employee_id.upper(), "labour",
+                            target_id=str(att_id), target_type="attendance",
+                            new_value="active",
+                            metadata={"lat": req.latitude, "lng": req.longitude, "dist_m": int(dist)})
+                conn.commit()
+            except HTTPException:
+                conn.rollback(); raise
+            except Exception as e:
+                conn.rollback(); raise HTTPException(500, str(e))
+            finally:
+                release_db(conn)
+
+    except RedisLock.LockNotAcquired:
+        raise HTTPException(429, "Check-in already in progress for this employee. Please wait a moment.")
+
+    # Broadcast to manager/HR WebSocket clients
+    await publish_event({
+        "type": "checkin",
+        "employee_id": req.employee_id.upper(),
+        "attendance_id": att_id,
+        "status": "active",
+        "site_id": user["sid"],
+        "timestamp": now.isoformat(),
+    })
+
     return {"success": True, "attendance_id": att_id,
             "message": f"✅ Checked in at {now.strftime('%H:%M:%S')}",
             "login_time": now.isoformat(), "distance_from_site": int(dist)}
@@ -789,34 +1093,67 @@ async def checkin(req: CheckinReq):
 # CHECKOUT
 # ─────────────────────────────────────────────
 @app.post("/api/checkout")
-async def checkout(req: CheckoutReq):
-    conn = get_db()
+async def checkout(req: CheckoutReq, request: Request,
+                   current: TokenData = Depends(require_labour)):
+    if current.employee_id != req.employee_id.upper():
+        raise HTTPException(403, "You can only check out for yourself")
+
+    # Rate limit: 3 checkout calls per employee per 60s
+    rl = await _get_rate_limiter()
     try:
-        c = conn.cursor()
-        c.execute("""SELECT a.*, s.latitude as slat, s.longitude as slng, s.radius_meters as srad
-                     FROM attendance a JOIN sites s ON a.site_id=s.id
-                     WHERE a.id=%s AND a.employee_id=%s AND a.logout_time IS NULL""",
-                  (req.attendance_id, req.employee_id))
-        att = c.fetchone()
-        if not att: raise HTTPException(404, "Active attendance record not found")
+        await rl.check("checkout", req.employee_id.upper())
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
 
-        dist  = haversine(req.latitude, req.longitude, att["slat"], att["slng"])
-        now   = datetime.now()
-        hours = calc_hours(att["login_time"], now)
-        c.execute("""UPDATE attendance SET logout_time=%s,logout_lat=%s,logout_lng=%s,
-                            hours_worked=%s,status='pending_manager' WHERE id=%s""",
-                  (now, req.latitude, req.longitude, hours, req.attendance_id))
+    r = await get_redis()
+    try:
+        async with RedisLock(r, f"checkout:{req.employee_id.upper()}", ttl=15):
+            conn = get_db()
+            try:
+                c = conn.cursor()
+                c.execute("""SELECT a.*, s.latitude as slat, s.longitude as slng, s.radius_meters as srad
+                             FROM attendance a JOIN sites s ON a.site_id=s.id
+                             WHERE a.id=%s AND a.employee_id=%s AND a.logout_time IS NULL""",
+                          (req.attendance_id, req.employee_id))
+                att = c.fetchone()
+                if not att: raise HTTPException(404, "Active attendance record not found")
 
-        c.execute("SELECT name, phone FROM users WHERE employee_id=%s", (req.employee_id,))
-        u = c.fetchone()
-        overtime_result = check_and_alert_overtime(c, req.employee_id, u["phone"], u["name"], now)
-        conn.commit()
-    except HTTPException:
-        conn.rollback(); raise
-    except Exception as e:
-        conn.rollback(); raise HTTPException(500, str(e))
-    finally:
-        release_db(conn)
+                dist  = haversine(req.latitude, req.longitude, att["slat"], att["slng"])
+                now   = datetime.now()
+                hours = calc_hours(att["login_time"], now)
+                c.execute("""UPDATE attendance SET logout_time=%s,logout_lat=%s,logout_lng=%s,
+                                    hours_worked=%s,status='pending_manager' WHERE id=%s""",
+                          (now, req.latitude, req.longitude, hours, req.attendance_id))
+
+                c.execute("SELECT name, phone, site_id FROM users WHERE employee_id=%s", (req.employee_id,))
+                u = c.fetchone()
+                overtime_result = check_and_alert_overtime(c, req.employee_id, u["phone"], u["name"], now)
+                write_audit(c, "checkout", req.employee_id.upper(), "labour",
+                            target_id=str(req.attendance_id), target_type="attendance",
+                            old_value="active", new_value="pending_manager",
+                            metadata={"hours_worked": hours, "dist_m": int(dist)})
+                conn.commit()
+                site_id = u["site_id"]
+            except HTTPException:
+                conn.rollback(); raise
+            except Exception as e:
+                conn.rollback(); raise HTTPException(500, str(e))
+            finally:
+                release_db(conn)
+
+    except RedisLock.LockNotAcquired:
+        raise HTTPException(429, "Check-out already in progress for this employee. Please wait a moment.")
+
+    # Broadcast to manager WebSocket clients
+    await publish_event({
+        "type": "attendance_update",
+        "employee_id": req.employee_id.upper(),
+        "attendance_id": req.attendance_id,
+        "status": "pending_manager",
+        "site_id": site_id,
+        "timestamp": now.isoformat(),
+    })
+
     return {"success": True, "message": f"✅ Checked out. You worked {hours} hours.",
             "hours_worked": hours, "logout_time": now.isoformat(), "distance_from_site": int(dist),
             "overtime": overtime_result}
@@ -825,7 +1162,11 @@ async def checkout(req: CheckoutReq):
 # ATTENDANCE TODAY / HISTORY
 # ─────────────────────────────────────────────
 @app.get("/api/attendance/today/{employee_id}")
-async def today_status(employee_id: str):
+async def today_status(employee_id: str,
+                       current: TokenData = Depends(get_current_user)):
+    # Labour can only see their own; manager/hr can see any
+    if current.role == "labour" and current.employee_id != employee_id.upper():
+        raise HTTPException(403, "You can only view your own attendance")
     today = datetime.now().strftime("%Y-%m-%d")
     conn  = get_db()
     try:
@@ -840,7 +1181,10 @@ async def today_status(employee_id: str):
     return {"has_record": bool(row), "record": dict(row) if row else None}
 
 @app.get("/api/attendance/history/{employee_id}")
-async def history(employee_id: str, limit: int = 30):
+async def history(employee_id: str, limit: int = 30,
+                  current: TokenData = Depends(get_current_user)):
+    if current.role == "labour" and current.employee_id != employee_id.upper():
+        raise HTTPException(403, "You can only view your own history")
     conn = get_db()
     try:
         c = conn.cursor()
@@ -863,7 +1207,10 @@ def _mgr_site(c, manager_id):
     return m["site_id"]
 
 @app.get("/api/manager/pending/{manager_id}")
-async def manager_pending(manager_id: str):
+async def manager_pending(manager_id: str,
+                          current: TokenData = Depends(require_manager)):
+    if current.employee_id != manager_id.upper():
+        raise HTTPException(403, "You can only view your own pending queue")
     conn = get_db()
     try:
         c = conn.cursor(); sid = _mgr_site(c, manager_id)
@@ -877,7 +1224,10 @@ async def manager_pending(manager_id: str):
         release_db(conn)
 
 @app.get("/api/manager/all/{manager_id}")
-async def manager_all(manager_id: str, date: str = None):
+async def manager_all(manager_id: str, date: str = None,
+                      current: TokenData = Depends(require_manager)):
+    if current.employee_id != manager_id.upper():
+        raise HTTPException(403, "You can only view your own site records")
     conn = get_db()
     try:
         c = conn.cursor(); sid = _mgr_site(c, manager_id)
@@ -893,7 +1243,10 @@ async def manager_all(manager_id: str, date: str = None):
         release_db(conn)
 
 @app.get("/api/manager/stats/{manager_id}")
-async def manager_stats(manager_id: str):
+async def manager_stats(manager_id: str,
+                        current: TokenData = Depends(require_manager)):
+    if current.employee_id != manager_id.upper():
+        raise HTTPException(403, "You can only view your own site stats")
     today = datetime.now().strftime("%Y-%m-%d")
     conn  = get_db()
     try:
@@ -911,16 +1264,27 @@ async def manager_stats(manager_id: str):
     return {"today_unique_checkins": tc, "pending_count": pc, "approved_count": ac, "total_labours_site": lc}
 
 @app.post("/api/manager/verify")
-async def manager_verify(req: ManagerVerifyReq):
+async def manager_verify(req: ManagerVerifyReq, request: Request,
+                         current: TokenData = Depends(require_manager)):
+    if current.employee_id != req.manager_id.upper():
+        raise HTTPException(403, "You can only verify records for your own site")
     conn = get_db()
     try:
         c = conn.cursor(); sid = _mgr_site(c, req.manager_id)
-        c.execute("SELECT id FROM attendance WHERE id=%s AND site_id=%s", (req.attendance_id, sid))
-        if not c.fetchone(): raise HTTPException(404, "Record not found")
-        new_status = "pending_hr" if req.approved else "rejected"
+        c.execute("SELECT id, status, employee_id FROM attendance WHERE id=%s AND site_id=%s",
+                  (req.attendance_id, sid))
+        row = c.fetchone()
+        if not row: raise HTTPException(404, "Record not found")
+        old_status  = row["status"]
+        employee_id = row["employee_id"]
+        new_status  = "pending_hr" if req.approved else "rejected"
         c.execute("""UPDATE attendance SET manager_verified=%s,manager_note=%s,
                             manager_verified_at=NOW(),status=%s WHERE id=%s""",
                   (req.approved, req.note, new_status, req.attendance_id))
+        write_audit(c, "manager_verify", req.manager_id.upper(), "manager",
+                    target_id=str(req.attendance_id), target_type="attendance",
+                    old_value=old_status, new_value=new_status,
+                    metadata={"approved": req.approved, "note": req.note or ""})
         conn.commit()
     except HTTPException:
         conn.rollback(); raise
@@ -928,20 +1292,30 @@ async def manager_verify(req: ManagerVerifyReq):
         conn.rollback(); raise HTTPException(500, str(e))
     finally:
         release_db(conn)
+
+    # Real-time push to the labour employee and HR broadcast channel
+    await publish_event({
+        "type": "attendance_update",
+        "attendance_id": req.attendance_id,
+        "employee_id": employee_id,
+        "status": new_status,
+        "updated_by_role": "manager",
+        "site_id": sid,
+        "timestamp": datetime.now().isoformat(),
+    })
+
     return {"success": True, "message": f"Record {'approved → HR' if req.approved else 'rejected'}"}
 
 # ─────────────────────────────────────────────
 # HR
 # ─────────────────────────────────────────────
-def _assert_hr(c, hr_id):
-    c.execute("SELECT id FROM users WHERE employee_id=%s AND role='hr'", (hr_id,))
-    if not c.fetchone(): raise HTTPException(403, "Not HR")
-
 @app.get("/api/hr/pending/{hr_id}")
-async def hr_pending(hr_id: str):
+async def hr_pending(hr_id: str, current: TokenData = Depends(require_hr)):
+    if current.employee_id != hr_id.upper():
+        raise HTTPException(403, "You can only view your own pending queue")
     conn = get_db()
     try:
-        c = conn.cursor(); _assert_hr(c, hr_id)
+        c = conn.cursor()
         c.execute("""SELECT a.*, u.name as labour_name, u.phone, u.department, s.name as site_name
                      FROM attendance a JOIN users u ON a.employee_id=u.employee_id
                      JOIN sites s ON a.site_id=s.id
@@ -951,10 +1325,13 @@ async def hr_pending(hr_id: str):
         release_db(conn)
 
 @app.get("/api/hr/all/{hr_id}")
-async def hr_all(hr_id: str, date: str = None, employee_id: str = None):
+async def hr_all(hr_id: str, date: str = None, employee_id: str = None,
+                 current: TokenData = Depends(require_hr)):
+    if current.employee_id != hr_id.upper():
+        raise HTTPException(403, "Forbidden")
     conn = get_db()
     try:
-        c = conn.cursor(); _assert_hr(c, hr_id)
+        c = conn.cursor()
         q = """SELECT a.*, u.name as labour_name, u.phone, u.department, s.name as site_name
                FROM attendance a JOIN users u ON a.employee_id=u.employee_id
                JOIN sites s ON a.site_id=s.id
@@ -969,7 +1346,7 @@ async def hr_all(hr_id: str, date: str = None, employee_id: str = None):
         release_db(conn)
 
 @app.get("/api/hr/summary")
-async def hr_summary():
+async def hr_summary(current: TokenData = Depends(require_hr)):
     today = datetime.now().strftime("%Y-%m-%d")
     conn  = get_db()
     try:
@@ -990,14 +1367,28 @@ async def hr_summary():
             "approved_today": at, "total_employees": te}
 
 @app.post("/api/hr/verify")
-async def hr_verify(req: HRVerifyReq):
+async def hr_verify(req: HRVerifyReq, request: Request,
+                    current: TokenData = Depends(require_hr)):
+    if current.employee_id != req.hr_id.upper():
+        raise HTTPException(403, "You can only verify as yourself")
     conn = get_db()
     try:
-        c = conn.cursor(); _assert_hr(c, req.hr_id)
-        new_status = "approved" if req.approved else "rejected"
+        c = conn.cursor()
+        c.execute("SELECT id, status, employee_id, site_id FROM attendance WHERE id=%s",
+                  (req.attendance_id,))
+        row = c.fetchone()
+        if not row: raise HTTPException(404, "Record not found")
+        old_status  = row["status"]
+        employee_id = row["employee_id"]
+        site_id     = row["site_id"]
+        new_status  = "approved" if req.approved else "rejected"
         c.execute("""UPDATE attendance SET hr_verified=%s,hr_note=%s,
                             hr_verified_at=NOW(),status=%s WHERE id=%s""",
                   (req.approved, req.note, new_status, req.attendance_id))
+        write_audit(c, "hr_verify", req.hr_id.upper(), "hr",
+                    target_id=str(req.attendance_id), target_type="attendance",
+                    old_value=old_status, new_value=new_status,
+                    metadata={"approved": req.approved, "note": req.note or ""})
         conn.commit()
     except HTTPException:
         conn.rollback(); raise
@@ -1005,6 +1396,18 @@ async def hr_verify(req: HRVerifyReq):
         conn.rollback(); raise HTTPException(500, str(e))
     finally:
         release_db(conn)
+
+    # Real-time push to the labour employee
+    await publish_event({
+        "type": "attendance_update",
+        "attendance_id": req.attendance_id,
+        "employee_id": employee_id,
+        "status": new_status,
+        "updated_by_role": "hr",
+        "site_id": site_id,
+        "timestamp": datetime.now().isoformat(),
+    })
+
     return {"success": True, "message": f"Record {new_status}."}
 
 # ─────────────────────────────────────────────
@@ -1014,7 +1417,8 @@ async def hr_verify(req: HRVerifyReq):
 # retrained; "prediction" here means a statistical projection.
 # ─────────────────────────────────────────────
 @app.get("/api/analytics/employee/{employee_id}")
-async def employee_analytics(employee_id: str, lookback_days: int = 90):
+async def employee_analytics(employee_id: str, lookback_days: int = 90,
+                             current: TokenData = Depends(get_current_user)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1071,7 +1475,8 @@ async def employee_analytics(employee_id: str, lookback_days: int = 90):
     }
 
 @app.get("/api/analytics/site/{site_id}")
-async def site_analytics(site_id: int):
+async def site_analytics(site_id: int,
+                         current: TokenData = Depends(require_manager_or_hr)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1079,7 +1484,7 @@ async def site_analytics(site_id: int):
         labourers = c.fetchall()
         results = []
         for lab in labourers:
-            r = await employee_analytics(lab["employee_id"])
+            r = await employee_analytics(lab["employee_id"], current=current)
             results.append(r)
     finally:
         release_db(conn)
@@ -1088,12 +1493,13 @@ async def site_analytics(site_id: int):
             "at_risk_of_overtime": len(at_risk), "details": results}
 
 @app.get("/api/ai/site-summary/{site_id}")
-async def ai_site_summary(site_id: int):
+async def ai_site_summary(site_id: int,
+                          current: TokenData = Depends(require_manager_or_hr)):
     """Real AI feature: sends actual computed attendance analytics to an LLM
     (Groq/OpenRouter) and asks it to reason over the data and write a plain-
     English report — patterns, risks, and recommendations a fixed rule
     wouldn't phrase or prioritize the same way for a human reader."""
-    analytics = await site_analytics(site_id)
+    analytics = await site_analytics(site_id, current=current)
     if analytics["employees_analyzed"] == 0:
         return {"site_id": site_id, "ai_used": False,
                 "message": "No labour assigned to this site yet."}
@@ -1136,7 +1542,8 @@ async def ai_site_summary(site_id: int):
     }
 
 @app.get("/api/ai/checkin-flag/{attendance_id}")
-async def ai_checkin_flag(attendance_id: int):
+async def ai_checkin_flag(attendance_id: int,
+                          current: TokenData = Depends(require_manager_or_hr)):
     """Real AI feature: asks the LLM to look at one attendance record plus
     that employee's recent history and flag anything that looks unusual,
     with a short plain-English reason — useful for a manager scanning a
@@ -1180,7 +1587,7 @@ async def ai_checkin_flag(attendance_id: int):
     }
 
 @app.get("/api/employees")
-async def get_employees():
+async def get_employees(current: TokenData = Depends(require_manager_or_hr)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1192,7 +1599,7 @@ async def get_employees():
         release_db(conn)
 
 @app.get("/api/sites")
-async def get_sites():
+async def get_sites(current: TokenData = Depends(get_current_user)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1251,7 +1658,10 @@ AttendTrack Attendance Policy (summary for employee Q&A):
 # EMPLOYEE Q&A — POST /api/employee/ask
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/employee/ask")
-async def employee_ask(req: EmployeeAskReq):
+async def employee_ask(req: EmployeeAskReq, request: Request,
+                       current: TokenData = Depends(require_labour)):
+    if current.employee_id != req.employee_id.upper():
+        raise HTTPException(403, "You can only ask questions about your own data")
     """
     Lets a labour employee ask natural-language questions about their own
     attendance records, status, hours, and policy.  The LLM is given:
@@ -1264,6 +1674,13 @@ async def employee_ask(req: EmployeeAskReq):
         raise HTTPException(400, "Question cannot be empty")
     if len(req.question) > 500:
         raise HTTPException(400, "Question too long (max 500 characters)")
+
+    # Rate limit: 10 AI questions per employee per 60s
+    rl = await _get_rate_limiter()
+    try:
+        await rl.check("ai_ask", req.employee_id.upper())
+    except RateLimiter.RateLimitExceeded as e:
+        raise HTTPException(429, detail=str(e))
 
     conn = get_db()
     try:
@@ -1375,8 +1792,10 @@ async def employee_ask(req: EmployeeAskReq):
 
 
 @app.get("/api/employee/qa-history/{employee_id}")
-async def employee_qa_history(employee_id: str, limit: int = 20):
-    """Returns the last N Q&A pairs for an employee (self-service audit)."""
+async def employee_qa_history(employee_id: str, limit: int = 20,
+                              current: TokenData = Depends(require_labour)):
+    if current.employee_id != employee_id.upper():
+        raise HTTPException(403, "You can only view your own Q&A history")
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1399,8 +1818,8 @@ async def employee_qa_history(employee_id: str, limit: int = 20):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/ml/train/{employee_id}")
-async def ml_train_employee(employee_id: str):
-    """Train (or retrain) ML models for one employee."""
+async def ml_train_employee(employee_id: str,
+                            current: TokenData = Depends(require_hr)):
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded — check server logs")
     conn = get_db()
@@ -1423,10 +1842,7 @@ async def ml_train_employee(employee_id: str):
 
 
 @app.post("/api/ml/train-all")
-async def ml_train_all():
-    """Retrain ML models for every labour employee. HR-only in practice — no
-    auth guard added here since the system is already behind a login; add a
-    depends() guard if needed."""
+async def ml_train_all(current: TokenData = Depends(require_hr)):
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded — check server logs")
     conn = get_db()
@@ -1448,7 +1864,8 @@ async def ml_train_all():
 
 
 @app.get("/api/ml/predict/{employee_id}")
-async def ml_predict_overtime(employee_id: str):
+async def ml_predict_overtime(employee_id: str,
+                              current: TokenData = Depends(require_manager_or_hr)):
     """
     ML-powered overtime projection for one employee.
     Uses a trained GradientBoostingRegressor if available,
@@ -1483,7 +1900,8 @@ async def ml_predict_overtime(employee_id: str):
 
 
 @app.get("/api/ml/anomalies/{employee_id}")
-async def ml_anomalies(employee_id: str, lookback_days: int = 60):
+async def ml_anomalies(employee_id: str, lookback_days: int = 60,
+                       current: TokenData = Depends(require_manager_or_hr)):
     """
     ML anomaly detection for one employee's recent records.
     Uses IsolationForest if trained, rule-based fallback otherwise.
@@ -1515,7 +1933,8 @@ async def ml_anomalies(employee_id: str, lookback_days: int = 60):
 
 
 @app.get("/api/ml/behaviour/site/{site_id}")
-async def ml_behaviour_site(site_id: int):
+async def ml_behaviour_site(site_id: int,
+                            current: TokenData = Depends(require_manager_or_hr)):
     """Run anomaly detection across all labourers on a site. Used by the
     behaviour-intelligence tab when ML is available."""
     if not ML_ENGINE_READY:
@@ -1850,8 +2269,8 @@ async def _boot_schedules():
 # ── REST endpoints for managing schedules ────────────────────────────────────
 
 @app.post("/api/reports/schedule")
-async def create_schedule(req: ScheduleReportReq):
-    """HR creates a new scheduled report."""
+async def create_schedule(req: ScheduleReportReq,
+                          current: TokenData = Depends(require_hr)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1890,8 +2309,7 @@ async def create_schedule(req: ScheduleReportReq):
 
 
 @app.get("/api/reports/schedules")
-async def list_schedules():
-    """List all scheduled reports (HR dashboard)."""
+async def list_schedules(current: TokenData = Depends(require_hr)):
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1906,7 +2324,8 @@ async def list_schedules():
 
 
 @app.delete("/api/reports/schedule/{schedule_id}")
-async def delete_schedule(schedule_id: int, hr_id: str):
+async def delete_schedule(schedule_id: int, hr_id: str,
+                          current: TokenData = Depends(require_hr)):
     """Disable a scheduled report (soft-delete via enabled=FALSE)."""
     conn = get_db()
     try:
@@ -1935,7 +2354,8 @@ async def delete_schedule(schedule_id: int, hr_id: str):
 
 
 @app.post("/api/reports/run-now/{schedule_id}")
-async def run_report_now(schedule_id: int):
+async def run_report_now(schedule_id: int,
+                         current: TokenData = Depends(require_hr)):
     """
     Manually trigger a scheduled report and WAIT for it to complete.
     Returns the delivery result so the caller can see exactly what happened
@@ -1994,7 +2414,8 @@ async def run_report_now(schedule_id: int):
 
 
 @app.get("/api/reports/history/{schedule_id}")
-async def report_history(schedule_id: int, limit: int = 10):
+async def report_history(schedule_id: int, limit: int = 10,
+                         current: TokenData = Depends(require_hr)):
     """Fetch the last N run logs for a schedule."""
     conn = get_db()
     try:
@@ -2019,7 +2440,7 @@ class HRAskReq(BaseModel):
     employee_id: Optional[str] = None   # None = ask about all employees
 
 @app.post("/api/hr/ask")
-async def hr_ask(req: HRAskReq):
+async def hr_ask(req: HRAskReq, current: TokenData = Depends(require_hr)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Question cannot be empty")
     if len(req.question) > 800:
@@ -2180,11 +2601,12 @@ from fastapi.responses import StreamingResponse
 
 @app.get("/api/hr/report/excel")
 async def hr_excel_report(
-    period: str = "monthly",          # "monthly" or "weekly"
+    period: str = "monthly",
     year:   int = None,
     month:  int = None,
-    week:   int = None,               # ISO week number (used when period=weekly)
+    week:   int = None,
     hr_id:  str = "HR001",
+    current: TokenData = Depends(require_hr),
 ):
     """
     Builds and streams an Excel workbook for the requested period.
