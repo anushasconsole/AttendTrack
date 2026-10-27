@@ -9,18 +9,44 @@ from typing import Optional, List
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
-# ─────────────────────────────────────────────
-# AUTH — JWT + bcrypt  (must load before app is created)
-# ─────────────────────────────────────────────
-from auth import (
-    hash_password, verify_password,
-    create_access_token,
-    blacklist_token,
-    get_current_user, require_labour, require_manager, require_hr, require_manager_or_hr,
-    TokenData, JWT_EXPIRE_HOURS,
-)
-
+# Load .env FIRST so JWT_SECRET_KEY and all env vars are available to auth.py
 load_dotenv()
+
+# ─────────────────────────────────────────────
+# AUTH — JWT + bcrypt  (must load AFTER load_dotenv)
+# ─────────────────────────────────────────────
+_AUTH_ERROR = None
+try:
+    from auth import (
+        hash_password, verify_password,
+        create_access_token,
+        blacklist_token,
+        get_current_user, require_labour, require_manager, require_hr, require_manager_or_hr,
+        TokenData, JWT_EXPIRE_HOURS,
+    )
+    print("✅ auth module loaded — JWT + bcrypt active")
+except ImportError as _ie:
+    _AUTH_ERROR = str(_ie)
+    print(f"❌ auth module failed to import: {_ie}")
+    print("   Missing packages — run: pip install 'python-jose[cryptography]' 'passlib[bcrypt]'")
+    # Provide no-op stubs so the app starts and gives a clear error
+    # instead of crashing entirely with a 500 on every request
+    import hashlib as _hashlib
+    JWT_EXPIRE_HOURS = 24
+    class TokenData:
+        def __init__(self, **kw): [setattr(self, k, v) for k, v in kw.items()]
+        employee_id = ""; role = ""; name = ""; site_id = None; jti = ""
+    async def _auth_unavailable(*a, **kw):
+        raise HTTPException(503, f"Auth packages not installed on server: {_AUTH_ERROR}. "
+                                 "Contact admin.")
+    get_current_user = require_labour = require_manager = \
+        require_hr = require_manager_or_hr = _auth_unavailable
+    def hash_password(p): return _hashlib.sha256(p.encode()).hexdigest()
+    def verify_password(p, h):
+        ok = _hashlib.sha256(p.encode()).hexdigest() == h
+        return ok, None
+    def create_access_token(**kw): return "no-auth"
+    async def blacklist_token(*a, **kw): pass
 
 # ─────────────────────────────────────────────
 # FACE RECOGNITION — optional, install separately
@@ -300,6 +326,7 @@ async def health():
             pass
     return {
         "status": "ok",
+        "auth": "jwt+bcrypt" if _AUTH_ERROR is None else f"DEGRADED: {_AUTH_ERROR}",
         "face_ready": FACE_READY,
         "face_bypass": not FACE_READY,
         "db": "postgresql",

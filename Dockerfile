@@ -47,10 +47,10 @@ RUN pip install --no-cache-dir \
     redis==5.0.4 \
     websockets==12.0
 
-# JWT auth + bcrypt password hashing
+# JWT auth + bcrypt password hashing (bcrypt direct — no passlib)
 RUN pip install --no-cache-dir \
     "python-jose[cryptography]==3.3.0" \
-    "passlib[bcrypt]==1.7.4"
+    "bcrypt==4.1.3"
 
 COPY . .
 

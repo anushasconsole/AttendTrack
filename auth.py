@@ -1,46 +1,24 @@
 """
 auth.py — AttendTrack JWT authentication layer
 ================================================
+Uses:
+  - bcrypt (direct, no passlib) for password hashing — compatible with bcrypt 4.x
+  - python-jose for JWT (HS256)
 
-Provides:
-  1. Password hashing / verification  (bcrypt via passlib)
-  2. JWT issue / decode               (HS256 via python-jose)
-  3. FastAPI Depends() guards:
-       - get_current_user()    → any authenticated user
-       - require_labour()      → labour role only
-       - require_manager()     → manager role only
-       - require_hr()          → hr role only
-       - require_manager_or_hr() → either
-  4. Token blacklist via Redis         (logout support)
-  5. Graceful password migration:
-       if a stored hash looks like old SHA-256 (64 hex chars),
-       we accept it once and re-hash it with bcrypt on the fly.
-
-Usage in endpoints:
-    from auth import require_hr, TokenData
-
-    @app.get("/api/hr/summary")
-    async def hr_summary(current: TokenData = Depends(require_hr)):
-        ...  # current.employee_id, current.role guaranteed
-
-Environment variables:
-    JWT_SECRET_KEY   — random string ≥ 32 chars (REQUIRED in prod)
-    JWT_EXPIRE_HOURS — access token lifetime in hours  (default: 24)
+Passlib was dropped because passlib 1.7.4 is incompatible with bcrypt 4.x
+(AttributeError: module 'bcrypt' has no attribute '__about__').
 """
 
 import hashlib
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-# ── python-jose JWT ──────────────────────────────────────────────────────────
 from jose import JWTError, jwt
-
-# ── passlib bcrypt ───────────────────────────────────────────────────────────
-from passlib.context import CryptContext
+import bcrypt
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -52,31 +30,30 @@ JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
 if JWT_SECRET_KEY == "CHANGE_ME_in_production_use_random_32chars":
     print("⚠️  JWT_SECRET_KEY is using the default dev value — set a strong secret in .env for production!")
+else:
+    print("✅ auth module loaded — JWT + bcrypt active")
 
 # ─────────────────────────────────────────────
-# PASSWORD HASHING  (bcrypt)
+# PASSWORD HASHING  (bcrypt 4.x direct)
 # ─────────────────────────────────────────────
+# bcrypt hard-truncates at 72 bytes. We pre-truncate explicitly
+# so the behaviour is deterministic and never raises an error.
+_BCRYPT_MAX = 72
 
-# Suppress the bcrypt 72-byte truncation warning/error — we handle the limit
-# explicitly in hash_password() and verify_password() below.
-try:
-    _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto",
-                            bcrypt__truncate_error=False)
-except TypeError:
-    # Older passlib versions don't support bcrypt__truncate_error
-    _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _prep(plain: str) -> bytes:
+    """Encode and truncate to 72 bytes — bcrypt's hard limit."""
+    return plain.encode("utf-8")[:_BCRYPT_MAX]
 
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash of *plain*.
-    Pre-truncates to 72 bytes (the bcrypt hard limit) so the hash is always
-    deterministic regardless of passlib version behaviour."""
-    plain_bytes = plain.encode("utf-8")[:72]
-    return _pwd_ctx.hash(plain_bytes.decode("utf-8", errors="replace"))
+    """Return a bcrypt hash string for *plain*."""
+    hashed = bcrypt.hashpw(_prep(plain), bcrypt.gensalt(rounds=12))
+    return hashed.decode("utf-8")
 
 
 def _old_sha256(plain: str) -> str:
-    """Reproduces the legacy SHA-256 hash so we can detect migration candidates."""
+    """Legacy SHA-256 hash — used only for migration detection."""
     return hashlib.sha256(plain.encode()).hexdigest()
 
 
@@ -84,29 +61,27 @@ def verify_password(plain: str, stored_hash: str) -> tuple[bool, Optional[str]]:
     """
     Verify *plain* against *stored_hash*.
 
-    Handles two hash formats:
-      - bcrypt  → verified directly with passlib
-      - SHA-256 (64-char hex) → accepted if matches, returns new bcrypt hash
-                                so the caller can upgrade the stored value
+    Handles two formats automatically:
+      - bcrypt  ($2b$...) → verified directly
+      - SHA-256 (64 hex)  → accepted once, returns new bcrypt hash to upgrade
 
     Returns:
         (ok: bool, new_bcrypt_hash: str | None)
-        new_bcrypt_hash is non-None only when the legacy hash matched
-        and the caller should re-store it as bcrypt.
+        new_bcrypt_hash is only set when a legacy hash was matched and should
+        be upgraded in the DB by the caller.
     """
-    # Detect legacy SHA-256: exactly 64 lowercase hex chars, no $ prefix
-    if len(stored_hash) == 64 and all(c in "0123456789abcdef" for c in stored_hash):
+    # Detect legacy SHA-256: 64 lowercase hex chars, no $ prefix
+    if len(stored_hash) == 64 and stored_hash.isalnum() and stored_hash == stored_hash.lower():
         if _old_sha256(plain) == stored_hash:
-            return True, hash_password(plain)   # signal: please upgrade
+            return True, hash_password(plain)   # matched — upgrade it
         return False, None
 
-    # Normal bcrypt path — pre-truncate to match how hash_password stores it
+    # bcrypt path
     try:
-        plain_bytes = plain.encode("utf-8")[:72]
-        ok = _pwd_ctx.verify(plain_bytes.decode("utf-8", errors="replace"), stored_hash)
+        ok = bcrypt.checkpw(_prep(plain), stored_hash.encode("utf-8"))
+        return ok, None
     except Exception:
-        ok = False
-    return ok, None
+        return False, None
 
 
 # ─────────────────────────────────────────────
@@ -124,33 +99,20 @@ class TokenData:
         self.role        = role
         self.name        = name
         self.site_id     = site_id
-        self.jti         = jti       # JWT ID — used for blacklisting
+        self.jti         = jti
 
 
 def create_access_token(employee_id: str, role: str,
                         name: str = "", site_id: Optional[int] = None) -> str:
-    """
-    Issue a signed JWT.
-
-    Payload:
-        sub   — employee_id  (subject, standard claim)
-        role  — labour | manager | hr
-        name  — display name
-        sid   — site_id (int or null)
-        jti   — unique token id (for blacklisting on logout)
-        exp   — expiry timestamp
-    """
-    import uuid
+    """Issue a signed HS256 JWT."""
     now    = datetime.now(tz=timezone.utc)
     expire = now + timedelta(hours=JWT_EXPIRE_HOURS)
-    jti    = str(uuid.uuid4())
-
     payload = {
         "sub":  employee_id,
         "role": role,
         "name": name,
         "sid":  site_id,
-        "jti":  jti,
+        "jti":  str(uuid.uuid4()),
         "iat":  now,
         "exp":  expire,
     }
@@ -158,13 +120,9 @@ def create_access_token(employee_id: str, role: str,
 
 
 def _decode_token(token: str) -> dict:
-    """
-    Decode and validate the JWT signature + expiry.
-    Raises HTTPException 401 on any failure.
-    """
+    """Decode and validate JWT. Raises 401 on any failure."""
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        return payload
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -178,24 +136,18 @@ def _decode_token(token: str) -> dict:
 # ─────────────────────────────────────────────
 
 async def blacklist_token(jti: str, ttl_seconds: int):
-    """
-    Mark a token as revoked.  Stored in Redis as:
-        blacklist:jti:<jti>  →  "1"   TTL = remaining token lifetime
-    If Redis is unavailable, logout still returns 200 but the token
-    won't be actively rejected until it naturally expires.
-    """
-    # Import here to avoid circular dependency (auth ← redis_layer ← main)
+    """Store revoked token jti in Redis. No-op if Redis unavailable."""
     from redis_layer import get_redis
     r = await get_redis()
     if r:
         try:
             await r.setex(f"blacklist:jti:{jti}", ttl_seconds, "1")
         except Exception as e:
-            print(f"[AUTH] blacklist_token failed (Redis error): {e}", flush=True)
+            print(f"[AUTH] blacklist_token failed: {e}", flush=True)
 
 
 async def _is_blacklisted(jti: str) -> bool:
-    """Return True if the token has been blacklisted (i.e. logged out)."""
+    """Return True if the token jti has been blacklisted."""
     from redis_layer import get_redis
     r = await get_redis()
     if not r:
@@ -203,7 +155,7 @@ async def _is_blacklisted(jti: str) -> bool:
     try:
         return await r.exists(f"blacklist:jti:{jti}") == 1
     except Exception:
-        return False   # Redis unavailable → don't block legitimate requests
+        return False
 
 
 # ─────────────────────────────────────────────
@@ -216,22 +168,17 @@ _bearer = HTTPBearer(auto_error=False)
 async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> TokenData:
-    """
-    Core dependency — validates the Bearer token and returns TokenData.
-    Used by all protected endpoints.
-    Raises 401 if the token is missing, invalid, expired, or blacklisted.
-    """
+    """Validate Bearer token and return TokenData. Raises 401 if invalid."""
     if creds is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Include 'Authorization: Bearer <token>' header.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    payload  = _decode_token(creds.credentials)
-    jti      = payload.get("jti", "")
-    emp_id   = payload.get("sub")
-    role     = payload.get("role")
+    payload = _decode_token(creds.credentials)
+    emp_id  = payload.get("sub")
+    role    = payload.get("role")
+    jti     = payload.get("jti", "")
 
     if not emp_id or not role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Malformed token payload")
@@ -253,7 +200,7 @@ async def get_current_user(
 
 
 # ─────────────────────────────────────────────
-# ROLE-SPECIFIC DEPENDENCIES
+# ROLE GUARDS
 # ─────────────────────────────────────────────
 
 async def require_labour(current: TokenData = Depends(get_current_user)) -> TokenData:
