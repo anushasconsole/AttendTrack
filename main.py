@@ -872,7 +872,9 @@ async def login(req: LoginReq, request: Request):
     except HTTPException:
         conn.rollback(); raise
     except Exception as e:
-        conn.rollback(); raise HTTPException(500, str(e))
+        conn.rollback()
+        print(f"[LOGIN ERROR] {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(500, "Login failed due to a server error. Please try again.")
     finally:
         release_db(conn)
 

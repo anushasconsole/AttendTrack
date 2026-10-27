@@ -57,12 +57,22 @@ if JWT_SECRET_KEY == "CHANGE_ME_in_production_use_random_32chars":
 # PASSWORD HASHING  (bcrypt)
 # ─────────────────────────────────────────────
 
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Suppress the bcrypt 72-byte truncation warning/error — we handle the limit
+# explicitly in hash_password() and verify_password() below.
+try:
+    _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto",
+                            bcrypt__truncate_error=False)
+except TypeError:
+    # Older passlib versions don't support bcrypt__truncate_error
+    _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(plain: str) -> str:
-    """Return a bcrypt hash of *plain*."""
-    return _pwd_ctx.hash(plain)
+    """Return a bcrypt hash of *plain*.
+    Pre-truncates to 72 bytes (the bcrypt hard limit) so the hash is always
+    deterministic regardless of passlib version behaviour."""
+    plain_bytes = plain.encode("utf-8")[:72]
+    return _pwd_ctx.hash(plain_bytes.decode("utf-8", errors="replace"))
 
 
 def _old_sha256(plain: str) -> str:
@@ -90,8 +100,12 @@ def verify_password(plain: str, stored_hash: str) -> tuple[bool, Optional[str]]:
             return True, hash_password(plain)   # signal: please upgrade
         return False, None
 
-    # Normal bcrypt path
-    ok = _pwd_ctx.verify(plain, stored_hash)
+    # Normal bcrypt path — pre-truncate to match how hash_password stores it
+    try:
+        plain_bytes = plain.encode("utf-8")[:72]
+        ok = _pwd_ctx.verify(plain_bytes.decode("utf-8", errors="replace"), stored_hash)
+    except Exception:
+        ok = False
     return ok, None
 
 
