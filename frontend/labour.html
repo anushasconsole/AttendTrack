@@ -281,11 +281,30 @@ input:focus{border-color:var(--purple-light)}
 
 // ─── STATE ───
 let currentUser = null;
+let accessToken = null;   // JWT stored in memory (not localStorage — safer)
 let attId = null;
 let regB64 = null, verifyB64 = null;
 let streams = {};
 let timerInterval = null;
 let loginStart = null;
+
+// ─── AUTH HELPERS ───
+function authHeaders(extra) {
+  const h = { 'Content-Type': 'application/json', ...extra };
+  if (accessToken) h['Authorization'] = `Bearer ${accessToken}`;
+  return h;
+}
+
+// Wrapper: auto-handle 401 (token expired → back to login)
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) {
+    showMsg('loginMsg', 'Session expired. Please log in again.', 'warn');
+    doLogout();
+    throw new Error('Session expired');
+  }
+  return res;
+}
 
 function fillDemo(id, pw) {
   document.getElementById('empId').value = id;
@@ -331,6 +350,8 @@ async function doLogin() {
       throw new Error('This portal is for Labour only. Use the correct dashboard.');
     }
 
+    // Store the JWT in memory
+    accessToken = d.access_token;
     currentUser = d.user;
 
     if (d.requires_face_verify) {
@@ -412,8 +433,8 @@ async function registerFace() {
   const btn = document.getElementById('btnRegFace');
   btn.disabled = true; btn.textContent = 'Registering…';
   try {
-    const r = await fetch(`${API}/api/face/register`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await apiFetch(`${API}/api/face/register`, {
+      method:'POST', headers: authHeaders(),
       body: JSON.stringify({employee_id: currentUser.employee_id, password: document.getElementById('pwd').value, face_image: regB64})
     });
     const d = await r.json();
@@ -433,8 +454,8 @@ async function verifyFace() {
   btn.disabled = true; btn.textContent = '🔍 Verifying…';
   showMsg('verifyMsg', 'Comparing with registered face…', 'info');
   try {
-    const r = await fetch(`${API}/api/face/verify`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await apiFetch(`${API}/api/face/verify`, {
+      method:'POST', headers: authHeaders(),
       body: JSON.stringify({employee_id: currentUser.employee_id, live_image: verifyB64})
     });
     const d = await r.json();
@@ -471,7 +492,8 @@ function enterDashboard() {
 
 async function loadTodayStatus() {
   try {
-    const r = await fetch(`${API}/api/attendance/today/${currentUser.employee_id}`);
+    const r = await apiFetch(`${API}/api/attendance/today/${currentUser.employee_id}`,
+      { headers: authHeaders() });
     const d = await r.json();
     const card = document.getElementById('statusCard');
     const btnCI = document.getElementById('btnCheckin');
@@ -524,8 +546,8 @@ async function doCheckin() {
   showMsg('dashMsg', '📍 Getting location…', 'info');
   navigator.geolocation.getCurrentPosition(async pos => {
     try {
-      const r = await fetch(`${API}/api/checkin`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
+      const r = await apiFetch(`${API}/api/checkin`, {
+        method:'POST', headers: authHeaders(),
         body: JSON.stringify({employee_id: currentUser.employee_id, latitude: pos.coords.latitude, longitude: pos.coords.longitude})
       });
       const d = await r.json();
@@ -541,8 +563,8 @@ async function doCheckout() {
   showMsg('dashMsg', '📍 Getting location…', 'info');
   navigator.geolocation.getCurrentPosition(async pos => {
     try {
-      const r = await fetch(`${API}/api/checkout`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
+      const r = await apiFetch(`${API}/api/checkout`, {
+        method:'POST', headers: authHeaders(),
         body: JSON.stringify({attendance_id: attId, employee_id: currentUser.employee_id, latitude: pos.coords.latitude, longitude: pos.coords.longitude})
       });
       const d = await r.json();
@@ -556,7 +578,8 @@ async function doCheckout() {
 
 async function loadHistory() {
   try {
-    const r = await fetch(`${API}/api/attendance/history/${currentUser.employee_id}?limit=10`);
+    const r = await apiFetch(`${API}/api/attendance/history/${currentUser.employee_id}?limit=10`,
+      { headers: authHeaders() });
     const d = await r.json();
     const list = document.getElementById('histList');
     if (!d.records.length) { list.innerHTML = '<div style="color:var(--white-dim);font-size:.8rem;text-align:center">No records yet</div>'; return; }
@@ -573,14 +596,26 @@ async function loadHistory() {
   } catch(e) { console.error(e); }
 }
 
-function logout() {
+async function doLogout() {
   clearInterval(timerInterval);
   stopAllCams();
+  // Blacklist the token server-side
+  if (accessToken) {
+    try {
+      await fetch(`${API}/api/logout`, {
+        method: 'POST', headers: authHeaders()
+      });
+    } catch(e) { /* ignore network errors on logout */ }
+  }
+  accessToken = null;
   currentUser = null; attId = null; regB64 = null; verifyB64 = null;
   document.getElementById('empId').value = '';
   document.getElementById('pwd').value = '';
   showScreen('s-login');
 }
+
+// Keep the old sync logout name working too
+function logout() { doLogout(); }
 
 // ─── Q&A ASSISTANT ───
 function fillQa(text) {
@@ -606,9 +641,9 @@ async function askQuestion() {
   ansMeta.textContent = '';
 
   try {
-    const res = await fetch(`${API}/api/employee/ask`, {
+    const res = await apiFetch(`${API}/api/employee/ask`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ employee_id: currentUser.employee_id, question })
     });
     const data = await res.json();
@@ -650,7 +685,8 @@ async function toggleQaHistory() {
   if (!currentUser) return;
   btn.textContent = 'Loading…';
   try {
-    const res  = await fetch(`${API}/api/employee/qa-history/${currentUser.employee_id}`);
+    const res  = await apiFetch(`${API}/api/employee/qa-history/${currentUser.employee_id}`,
+      { headers: authHeaders() });
     const data = await res.json();
     const items = data.history || [];
     if (!items.length) {

@@ -69,6 +69,7 @@
 
   const state = {
     currentUser: null,
+    accessToken: null,    // JWT stored in memory
     currentTab: 'overview',
     currentSummary: null,
     employees: [],
@@ -133,8 +134,24 @@
     return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   }
 
+  function authHeaders(extra) {
+    const h = { 'Content-Type': 'application/json', ...extra };
+    if (state.accessToken) h['Authorization'] = `Bearer ${state.accessToken}`;
+    return h;
+  }
+
   async function apiJson(path, options = {}) {
-    const response = await fetch(`${apiBase}${path}`, options);
+    // Always inject auth header
+    const opts = {
+      ...options,
+      headers: authHeaders(options.headers || {}),
+    };
+    const response = await fetch(`${apiBase}${path}`, opts);
+    if (response.status === 401) {
+      // Token expired or revoked — force logout
+      doLogout();
+      throw new Error('Session expired. Please log in again.');
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || payload.message || payload.error || 'Request failed');
@@ -786,14 +803,20 @@
     const pw = el('pwd')?.value || '';
     if (!id || !pw) return;
     try {
-      const payload = await apiJson('/api/login', {
+      // Login doesn't need an auth header — it IS the auth
+      const response = await fetch(`${apiBase}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employee_id: id, password: pw }),
       });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || payload.message || 'Login failed');
+
       if (payload.user.role !== cfg.loginRole) {
         throw new Error(cfg.loginRole === 'manager' ? 'This portal is for Site Managers only.' : 'This portal is for HR only.');
       }
+      // Store JWT in memory
+      state.accessToken = payload.access_token;
       state.currentUser = payload.user;
       applyRoleVisibility(true);
       setText('navName', state.currentUser.name);
@@ -817,10 +840,20 @@
     }
   }
 
-  function logout() {
+  async function doLogout() {
     stopRefresh();
     closeAiSheet();
+    // Blacklist token server-side
+    if (state.accessToken) {
+      try {
+        await fetch(`${apiBase}/api/logout`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+      } catch(e) { /* ignore network errors on logout */ }
+    }
     state.currentUser = null;
+    state.accessToken = null;
     state.currentSummary = null;
     state.allRecords = [];
     state.pendingRecords = [];
@@ -832,6 +865,9 @@
       el('loginMsg').textContent = '';
     }
   }
+
+  // Keep sync name for onclick handlers
+  function logout() { doLogout(); }
 
   function fillDemo(id, pw) {
     const empId = el('empId');
