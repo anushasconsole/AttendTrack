@@ -651,6 +651,33 @@ def calc_hours(login, logout) -> float:
     except: return 0.0
 
 # ─────────────────────────────────────────────
+# ASYNC DB HELPER
+# ─────────────────────────────────────────────
+async def run_db(fn, *args, **kwargs):
+    """
+    Run a synchronous DB function in a thread pool so it never blocks
+    the asyncio event loop.
+
+    Usage:
+        def _get_user(employee_id):
+            conn = get_db()
+            try:
+                c = conn.cursor()
+                c.execute("SELECT * FROM users WHERE employee_id=%s", (employee_id,))
+                return c.fetchone()
+            finally:
+                release_db(conn)
+
+        user = await run_db(_get_user, employee_id)
+
+    This gives us the scalability benefit of async DB access without
+    a full psycopg2 → asyncpg migration (which would require rewriting
+    all 111 queries to use $1/$2 placeholders and a different row API).
+    The thread pool is managed by asyncio (default: min(32, cpu+4) threads).
+    """
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+# ─────────────────────────────────────────────
 # AUDIT LOG WRITER
 # ─────────────────────────────────────────────
 def write_audit(c, action: str, actor_id: str, actor_role: str,
@@ -903,6 +930,7 @@ class ScheduleReportReq(BaseModel):
 # LOGIN
 # ─────────────────────────────────────────────
 @app.post("/api/login")
+@app.post("/api/login")
 async def login(req: LoginReq, request: Request):
     # Rate limit: 10 attempts per IP per 60s
     rl = await _get_rate_limiter()
@@ -912,48 +940,50 @@ async def login(req: LoginReq, request: Request):
     except RateLimiter.RateLimitExceeded as e:
         raise HTTPException(429, detail=str(e))
 
-    conn = get_db()
+    def _db_login(employee_id, password, ip):
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute("""SELECT u.*, s.name as site_name, s.latitude, s.longitude, s.radius_meters
+                         FROM users u LEFT JOIN sites s ON u.site_id=s.id
+                         WHERE u.employee_id=%s""", (employee_id,))
+            user = c.fetchone()
+            if not user:
+                return None, None, None
+            ok, new_hash = verify_password(password, user["password_hash"])
+            if not ok:
+                return None, None, None
+            if new_hash:
+                c.execute("UPDATE users SET password_hash=%s WHERE employee_id=%s",
+                          (new_hash, user["employee_id"]))
+                print(f"[AUTH] Migrated {user['employee_id']} SHA-256 → bcrypt", flush=True)
+            write_audit(c, "login", user["employee_id"], user["role"], ip_address=ip)
+            conn.commit()
+            return dict(user), None, None
+        except Exception as e:
+            conn.rollback()
+            return None, None, str(e)
+        finally:
+            release_db(conn)
+
     try:
-        c = conn.cursor()
-        c.execute("""SELECT u.*, s.name as site_name, s.latitude, s.longitude, s.radius_meters
-                     FROM users u LEFT JOIN sites s ON u.site_id=s.id
-                     WHERE u.employee_id=%s""",
-                  (req.employee_id.upper(),))
-        user = c.fetchone()
-
-        if not user:
-            raise HTTPException(401, "Invalid employee ID or password")
-
-        ok, new_hash = verify_password(req.password, user["password_hash"])
-        if not ok:
-            raise HTTPException(401, "Invalid employee ID or password")
-
-        # ── On-the-fly bcrypt migration ──────────────────────────────────────
-        # If the stored hash was legacy SHA-256, upgrade it to bcrypt now
-        if new_hash:
-            c.execute("UPDATE users SET password_hash=%s WHERE employee_id=%s",
-                      (new_hash, user["employee_id"]))
-            print(f"[AUTH] Migrated password hash for {user['employee_id']} from SHA-256 → bcrypt", flush=True)
-
-        write_audit(c, "login", user["employee_id"], user["role"], ip_address=client_ip)
-        conn.commit()
-    except HTTPException:
-        conn.rollback(); raise
+        user, _, err = await run_db(_db_login, req.employee_id.upper(), req.password, client_ip)
     except Exception as e:
-        conn.rollback()
         print(f"[LOGIN ERROR] {type(e).__name__}: {e}", flush=True)
         raise HTTPException(500, "Login failed due to a server error. Please try again.")
-    finally:
-        release_db(conn)
 
-    # Issue JWT
+    if err:
+        print(f"[LOGIN ERROR] {err}", flush=True)
+        raise HTTPException(500, "Login failed due to a server error. Please try again.")
+    if not user:
+        raise HTTPException(401, "Invalid employee ID or password")
+
     token = create_access_token(
         employee_id=user["employee_id"],
         role=user["role"],
         name=user["name"],
         site_id=user["site_id"],
     )
-
     return {
         "success": True,
         "access_token": token,
@@ -1106,44 +1136,55 @@ async def checkin(req: CheckinReq, request: Request,
     r = await get_redis()
     try:
         async with RedisLock(r, f"checkin:{req.employee_id.upper()}", ttl=15):
-            conn = get_db()
-            try:
-                c = conn.cursor()
-                c.execute("""SELECT u.*, s.latitude as slat, s.longitude as slng,
-                                    s.radius_meters as srad, s.id as sid
-                             FROM users u JOIN sites s ON u.site_id=s.id WHERE u.employee_id=%s""",
-                          (req.employee_id,))
-                user = c.fetchone()
-                if not user: raise HTTPException(404, "Employee not found or no site assigned")
 
-                today = datetime.now().strftime("%Y-%m-%d")
-                c.execute("SELECT id FROM attendance WHERE employee_id=%s AND date=%s", (req.employee_id, today))
-                if c.fetchone():
-                    raise HTTPException(400, "Already checked in today. Only one check-in per day allowed.")
+            def _db_checkin(employee_id, lat, lng):
+                conn = get_db()
+                try:
+                    c = conn.cursor()
+                    c.execute("""SELECT u.*, s.latitude as slat, s.longitude as slng,
+                                        s.radius_meters as srad, s.id as sid
+                                 FROM users u JOIN sites s ON u.site_id=s.id
+                                 WHERE u.employee_id=%s""", (employee_id,))
+                    user = c.fetchone()
+                    if not user:
+                        raise HTTPException(404, "Employee not found or no site assigned")
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    c.execute("SELECT id FROM attendance WHERE employee_id=%s AND date=%s",
+                              (employee_id, today))
+                    if c.fetchone():
+                        raise HTTPException(400, "Already checked in today.")
+                    dist = haversine(lat, lng, user["slat"], user["slng"])
+                    if dist > user["srad"]:
+                        raise HTTPException(400, f"You are {int(dist)}m from site. Must be within {int(user['srad'])}m.")
+                    now = datetime.now()
+                    c.execute("""INSERT INTO attendance
+                                 (employee_id,site_id,login_time,login_lat,login_lng,date,status)
+                                 VALUES (%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
+                              (employee_id, user["sid"], now, lat, lng, today))
+                    att_id = c.fetchone()["id"]
+                    write_audit(c, "checkin", employee_id.upper(), "labour",
+                                target_id=str(att_id), target_type="attendance",
+                                new_value="active",
+                                metadata={"lat": lat, "lng": lng, "dist_m": int(dist)})
+                    conn.commit()
+                    return {"att_id": att_id, "now": now, "dist": dist,
+                            "sid": user["sid"], "emp_id": user["employee_id"]}
+                except HTTPException:
+                    conn.rollback(); raise
+                except Exception as e:
+                    conn.rollback(); raise HTTPException(500, str(e))
+                finally:
+                    release_db(conn)
 
-                dist = haversine(req.latitude, req.longitude, user["slat"], user["slng"])
-                if dist > user["srad"]:
-                    raise HTTPException(400, f"You are {int(dist)}m from site. Must be within {int(user['srad'])}m.")
-
-                now = datetime.now()
-                c.execute("""INSERT INTO attendance (employee_id,site_id,login_time,login_lat,login_lng,date,status)
-                             VALUES (%s,%s,%s,%s,%s,%s,'active') RETURNING id""",
-                          (req.employee_id, user["sid"], now, req.latitude, req.longitude, today))
-                att_id = c.fetchone()["id"]
-                write_audit(c, "checkin", req.employee_id.upper(), "labour",
-                            target_id=str(att_id), target_type="attendance",
-                            new_value="active",
-                            metadata={"lat": req.latitude, "lng": req.longitude, "dist_m": int(dist)})
-                conn.commit()
-            except HTTPException:
-                conn.rollback(); raise
-            except Exception as e:
-                conn.rollback(); raise HTTPException(500, str(e))
-            finally:
-                release_db(conn)
+            result = await run_db(_db_checkin, req.employee_id.upper(),
+                                  req.latitude, req.longitude)
+            att_id = result["att_id"]
+            now    = result["now"]
+            dist   = result["dist"]
+            sid    = result["sid"]
 
     except RedisLock.LockNotAcquired:
-        raise HTTPException(429, "Check-in already in progress for this employee. Please wait a moment.")
+        raise HTTPException(429, "Check-in already in progress. Please wait a moment.")
 
     # Broadcast to manager/HR WebSocket clients
     await publish_event({
@@ -1151,14 +1192,14 @@ async def checkin(req: CheckinReq, request: Request,
         "employee_id": req.employee_id.upper(),
         "attendance_id": att_id,
         "status": "active",
-        "site_id": user["sid"],
+        "site_id": sid,
         "timestamp": now.isoformat(),
     })
     # Invalidate stats caches so dashboards see fresh counts immediately
     await _cache_invalidate(
         "cache:hr:summary",
-        f"cache:mgr:stats:{user['employee_id'].upper()}",
-        f"cache:analytics:site:{user['sid']}",
+        f"cache:mgr:stats:{req.employee_id.upper()}",
+        f"cache:analytics:site:{sid}",
     )
 
     return {"success": True, "attendance_id": att_id,
@@ -1184,41 +1225,57 @@ async def checkout(req: CheckoutReq, request: Request,
     r = await get_redis()
     try:
         async with RedisLock(r, f"checkout:{req.employee_id.upper()}", ttl=15):
-            conn = get_db()
-            try:
-                c = conn.cursor()
-                c.execute("""SELECT a.*, s.latitude as slat, s.longitude as slng, s.radius_meters as srad
-                             FROM attendance a JOIN sites s ON a.site_id=s.id
-                             WHERE a.id=%s AND a.employee_id=%s AND a.logout_time IS NULL""",
-                          (req.attendance_id, req.employee_id))
-                att = c.fetchone()
-                if not att: raise HTTPException(404, "Active attendance record not found")
 
-                dist  = haversine(req.latitude, req.longitude, att["slat"], att["slng"])
-                now   = datetime.now()
-                hours = calc_hours(att["login_time"], now)
-                c.execute("""UPDATE attendance SET logout_time=%s,logout_lat=%s,logout_lng=%s,
-                                    hours_worked=%s,status='pending_manager' WHERE id=%s""",
-                          (now, req.latitude, req.longitude, hours, req.attendance_id))
+            def _db_checkout(att_id, employee_id, lat, lng):
+                conn = get_db()
+                try:
+                    c = conn.cursor()
+                    c.execute("""SELECT a.*, s.latitude as slat, s.longitude as slng,
+                                        s.radius_meters as srad
+                                 FROM attendance a JOIN sites s ON a.site_id=s.id
+                                 WHERE a.id=%s AND a.employee_id=%s
+                                   AND a.logout_time IS NULL""",
+                              (att_id, employee_id))
+                    att = c.fetchone()
+                    if not att:
+                        raise HTTPException(404, "Active attendance record not found")
+                    dist  = haversine(lat, lng, att["slat"], att["slng"])
+                    now   = datetime.now()
+                    hours = calc_hours(att["login_time"], now)
+                    c.execute("""UPDATE attendance
+                                 SET logout_time=%s,logout_lat=%s,logout_lng=%s,
+                                     hours_worked=%s,status='pending_manager'
+                                 WHERE id=%s""",
+                              (now, lat, lng, hours, att_id))
+                    c.execute("SELECT name, phone, site_id FROM users WHERE employee_id=%s",
+                              (employee_id,))
+                    u = c.fetchone()
+                    overtime_result = check_and_alert_overtime(
+                        c, employee_id, u["phone"], u["name"], now)
+                    write_audit(c, "checkout", employee_id.upper(), "labour",
+                                target_id=str(att_id), target_type="attendance",
+                                old_value="active", new_value="pending_manager",
+                                metadata={"hours_worked": hours, "dist_m": int(dist)})
+                    conn.commit()
+                    return {"hours": hours, "dist": dist, "now": now,
+                            "site_id": u["site_id"], "overtime": overtime_result}
+                except HTTPException:
+                    conn.rollback(); raise
+                except Exception as e:
+                    conn.rollback(); raise HTTPException(500, str(e))
+                finally:
+                    release_db(conn)
 
-                c.execute("SELECT name, phone, site_id FROM users WHERE employee_id=%s", (req.employee_id,))
-                u = c.fetchone()
-                overtime_result = check_and_alert_overtime(c, req.employee_id, u["phone"], u["name"], now)
-                write_audit(c, "checkout", req.employee_id.upper(), "labour",
-                            target_id=str(req.attendance_id), target_type="attendance",
-                            old_value="active", new_value="pending_manager",
-                            metadata={"hours_worked": hours, "dist_m": int(dist)})
-                conn.commit()
-                site_id = u["site_id"]
-            except HTTPException:
-                conn.rollback(); raise
-            except Exception as e:
-                conn.rollback(); raise HTTPException(500, str(e))
-            finally:
-                release_db(conn)
+            co = await run_db(_db_checkout, req.attendance_id, req.employee_id,
+                              req.latitude, req.longitude)
+            hours          = co["hours"]
+            dist           = co["dist"]
+            now            = co["now"]
+            site_id        = co["site_id"]
+            overtime_result = co["overtime"]
 
     except RedisLock.LockNotAcquired:
-        raise HTTPException(429, "Check-out already in progress for this employee. Please wait a moment.")
+        raise HTTPException(429, "Check-out already in progress. Please wait a moment.")
 
     # Broadcast to manager WebSocket clients
     await publish_event({
@@ -1251,34 +1308,43 @@ async def today_status(employee_id: str,
     if current.role == "labour" and current.employee_id != employee_id.upper():
         raise HTTPException(403, "You can only view your own attendance")
     today = datetime.now().strftime("%Y-%m-%d")
-    conn  = get_db()
-    try:
-        c = conn.cursor()
-        c.execute("""SELECT a.*, s.name as site_name FROM attendance a
-                     JOIN sites s ON a.site_id=s.id
-                     WHERE a.employee_id=%s AND a.date=%s ORDER BY a.id DESC LIMIT 1""",
-                  (employee_id, today))
-        row = c.fetchone()
-    finally:
-        release_db(conn)
-    return {"has_record": bool(row), "record": dict(row) if row else None}
+
+    def _db_today(eid, d):
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute("""SELECT a.*, s.name as site_name FROM attendance a
+                         JOIN sites s ON a.site_id=s.id
+                         WHERE a.employee_id=%s AND a.date=%s ORDER BY a.id DESC LIMIT 1""",
+                      (eid, d))
+            row = c.fetchone()
+            return dict(row) if row else None
+        finally:
+            release_db(conn)
+
+    row = await run_db(_db_today, employee_id, today)
+    return {"has_record": bool(row), "record": row}
 
 @app.get("/api/attendance/history/{employee_id}")
 async def history(employee_id: str, limit: int = 30,
                   current: TokenData = Depends(get_current_user)):
     if current.role == "labour" and current.employee_id != employee_id.upper():
         raise HTTPException(403, "You can only view your own history")
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        c.execute("""SELECT a.*, s.name as site_name FROM attendance a
-                     JOIN sites s ON a.site_id=s.id
-                     WHERE a.employee_id=%s ORDER BY a.date DESC, a.id DESC LIMIT %s""",
-                  (employee_id, limit))
-        rows = c.fetchall()
-    finally:
-        release_db(conn)
-    return {"records": [dict(r) for r in rows]}
+
+    def _db_history(eid, lim):
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute("""SELECT a.*, s.name as site_name FROM attendance a
+                         JOIN sites s ON a.site_id=s.id
+                         WHERE a.employee_id=%s ORDER BY a.date DESC, a.id DESC LIMIT %s""",
+                      (eid, lim))
+            return [dict(r) for r in c.fetchall()]
+        finally:
+            release_db(conn)
+
+    rows = await run_db(_db_history, employee_id, limit)
+    return {"records": rows}
 
 # ─────────────────────────────────────────────
 # MANAGER
@@ -1294,36 +1360,45 @@ async def manager_pending(manager_id: str,
                           current: TokenData = Depends(require_manager)):
     if current.employee_id != manager_id.upper():
         raise HTTPException(403, "You can only view your own pending queue")
-    conn = get_db()
-    try:
-        c = conn.cursor(); sid = _mgr_site(c, manager_id)
-        c.execute("""SELECT a.*, u.name as labour_name, u.phone, s.name as site_name
-                     FROM attendance a JOIN users u ON a.employee_id=u.employee_id
-                     JOIN sites s ON a.site_id=s.id
-                     WHERE a.site_id=%s AND a.status='pending_manager' AND a.logout_time IS NOT NULL
-                     ORDER BY a.date DESC""", (sid,))
-        return {"records": [dict(r) for r in c.fetchall()]}
-    finally:
-        release_db(conn)
+
+    def _db(mgr_id):
+        conn = get_db()
+        try:
+            c = conn.cursor(); sid = _mgr_site(c, mgr_id)
+            c.execute("""SELECT a.*, u.name as labour_name, u.phone, s.name as site_name
+                         FROM attendance a JOIN users u ON a.employee_id=u.employee_id
+                         JOIN sites s ON a.site_id=s.id
+                         WHERE a.site_id=%s AND a.status='pending_manager'
+                           AND a.logout_time IS NOT NULL
+                         ORDER BY a.date DESC""", (sid,))
+            return [dict(r) for r in c.fetchall()]
+        finally:
+            release_db(conn)
+
+    return {"records": await run_db(_db, manager_id)}
 
 @app.get("/api/manager/all/{manager_id}")
 async def manager_all(manager_id: str, date: str = None,
                       current: TokenData = Depends(require_manager)):
     if current.employee_id != manager_id.upper():
         raise HTTPException(403, "You can only view your own site records")
-    conn = get_db()
-    try:
-        c = conn.cursor(); sid = _mgr_site(c, manager_id)
-        q = """SELECT a.*, u.name as labour_name, u.phone, s.name as site_name
-               FROM attendance a JOIN users u ON a.employee_id=u.employee_id
-               JOIN sites s ON a.site_id=s.id WHERE a.site_id=%s"""
-        p = [sid]
-        if date: q += " AND a.date=%s"; p.append(date)
-        q += " ORDER BY a.date DESC, a.id DESC"
-        c.execute(q, p)
-        return {"records": [dict(r) for r in c.fetchall()]}
-    finally:
-        release_db(conn)
+
+    def _db(mgr_id, d):
+        conn = get_db()
+        try:
+            c = conn.cursor(); sid = _mgr_site(c, mgr_id)
+            q = """SELECT a.*, u.name as labour_name, u.phone, s.name as site_name
+                   FROM attendance a JOIN users u ON a.employee_id=u.employee_id
+                   JOIN sites s ON a.site_id=s.id WHERE a.site_id=%s"""
+            p = [sid]
+            if d: q += " AND a.date=%s"; p.append(d)
+            q += " ORDER BY a.date DESC, a.id DESC"
+            c.execute(q, p)
+            return [dict(r) for r in c.fetchall()]
+        finally:
+            release_db(conn)
+
+    return {"records": await run_db(_db, manager_id, date)}
 
 @app.get("/api/manager/stats/{manager_id}")
 async def manager_stats(manager_id: str,
@@ -1405,37 +1480,49 @@ async def manager_verify(req: ManagerVerifyReq, request: Request,
 async def hr_pending(hr_id: str, current: TokenData = Depends(require_hr)):
     if current.employee_id != hr_id.upper():
         raise HTTPException(403, "You can only view your own pending queue")
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        c.execute("""SELECT a.*, u.name as labour_name, u.phone, u.department, s.name as site_name
-                     FROM attendance a JOIN users u ON a.employee_id=u.employee_id
-                     JOIN sites s ON a.site_id=s.id
-                     WHERE a.status='pending_hr' AND a.manager_verified=TRUE ORDER BY a.date DESC""")
-        return {"records": [dict(r) for r in c.fetchall()]}
-    finally:
-        release_db(conn)
+
+    def _db():
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            c.execute("""SELECT a.*, u.name as labour_name, u.phone, u.department,
+                                s.name as site_name
+                         FROM attendance a JOIN users u ON a.employee_id=u.employee_id
+                         JOIN sites s ON a.site_id=s.id
+                         WHERE a.status='pending_hr' AND a.manager_verified=TRUE
+                         ORDER BY a.date DESC""")
+            return [dict(r) for r in c.fetchall()]
+        finally:
+            release_db(conn)
+
+    return {"records": await run_db(_db)}
 
 @app.get("/api/hr/all/{hr_id}")
 async def hr_all(hr_id: str, date: str = None, employee_id: str = None,
                  current: TokenData = Depends(require_hr)):
     if current.employee_id != hr_id.upper():
         raise HTTPException(403, "Forbidden")
-    conn = get_db()
-    try:
-        c = conn.cursor()
-        q = """SELECT a.*, u.name as labour_name, u.phone, u.department, s.name as site_name
-               FROM attendance a JOIN users u ON a.employee_id=u.employee_id
-               JOIN sites s ON a.site_id=s.id
-               WHERE a.status IN ('pending_hr','approved','rejected') AND a.manager_verified=TRUE"""
-        p = []
-        if date:        q += " AND a.date=%s";        p.append(date)
-        if employee_id: q += " AND a.employee_id=%s"; p.append(employee_id)
-        q += " ORDER BY a.date DESC LIMIT 500"
-        c.execute(q, p)
-        return {"records": [dict(r) for r in c.fetchall()]}
-    finally:
-        release_db(conn)
+
+    def _db(d, eid):
+        conn = get_db()
+        try:
+            c = conn.cursor()
+            q = """SELECT a.*, u.name as labour_name, u.phone, u.department,
+                          s.name as site_name
+                   FROM attendance a JOIN users u ON a.employee_id=u.employee_id
+                   JOIN sites s ON a.site_id=s.id
+                   WHERE a.status IN ('pending_hr','approved','rejected')
+                     AND a.manager_verified=TRUE"""
+            p = []
+            if d:   q += " AND a.date=%s";        p.append(d)
+            if eid: q += " AND a.employee_id=%s"; p.append(eid)
+            q += " ORDER BY a.date DESC LIMIT 500"
+            c.execute(q, p)
+            return [dict(r) for r in c.fetchall()]
+        finally:
+            release_db(conn)
+
+    return {"records": await run_db(_db, date, employee_id)}
 
 @app.get("/api/hr/summary")
 async def hr_summary(current: TokenData = Depends(require_hr)):
@@ -1803,6 +1890,62 @@ if ML_ENGINE_READY:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ML MODEL PERSISTENCE  (joblib → Redis)
+# Models are stored as serialised blobs so they survive container restarts.
+# Key pattern:  ml:model:{employee_id}   TTL = 25h
+# Falls back silently if Redis or joblib unavailable.
+# ─────────────────────────────────────────────────────────────────────────────
+async def _ml_save_model(employee_id: str):
+    """Serialise the in-memory model for employee_id and store in Redis."""
+    if not ML_ENGINE_READY:
+        return
+    r = await get_redis()
+    if not r:
+        return
+    try:
+        import joblib, io
+        model_dict = ml_engine._models.get(employee_id)
+        if not model_dict:
+            return
+        buf = io.BytesIO()
+        await asyncio.to_thread(joblib.dump, model_dict, buf)
+        await r.setex(f"ml:model:{employee_id}", 90000, buf.getvalue())  # 25h TTL
+        print(f"[ML] Persisted model for {employee_id} to Redis", flush=True)
+    except Exception as e:
+        print(f"[ML] Failed to persist model for {employee_id}: {e}", flush=True)
+
+
+async def _ml_load_model(employee_id: str) -> bool:
+    """Try to restore a model for employee_id from Redis into ml_engine._models.
+    Returns True if a model was loaded, False otherwise."""
+    if not ML_ENGINE_READY:
+        return False
+    r = await get_redis()
+    if not r:
+        return False
+    try:
+        import joblib, io
+        # Use a raw (non-decoded) Redis client for binary blobs
+        from redis_layer import get_redis as _get_r
+        import redis.asyncio as aioredis
+        raw_r = aioredis.from_url(
+            __import__('os').getenv("REDIS_URL", ""),
+            decode_responses=False,
+            socket_timeout=3,
+        )
+        blob = await raw_r.get(f"ml:model:{employee_id}")
+        await raw_r.aclose()
+        if not blob:
+            return False
+        model_dict = await asyncio.to_thread(joblib.load, io.BytesIO(blob))
+        ml_engine._models[employee_id] = model_dict
+        return True
+    except Exception as e:
+        print(f"[ML] Failed to restore model for {employee_id}: {e}", flush=True)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ATTENDANCE POLICY — used by the employee Q&A system prompt
 # ─────────────────────────────────────────────────────────────────────────────
 ATTENDANCE_POLICY = f"""
@@ -2004,8 +2147,10 @@ async def employee_qa_history(employee_id: str, limit: int = 20,
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/ml/train/{employee_id}")
+@app.post("/api/ml/train/{employee_id}")
 async def ml_train_employee(employee_id: str,
                             current: TokenData = Depends(require_hr)):
+    """Train (or retrain) ML models for one employee, then persist to Redis."""
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded — check server logs")
     conn = get_db()
@@ -2022,43 +2167,60 @@ async def ml_train_employee(employee_id: str,
     finally:
         release_db(conn)
 
-    import asyncio
     result = await asyncio.to_thread(ml_engine.train_employee, employee_id.upper(), records)
+
+    # Persist trained model blob to Redis (TTL = 25h so it survives a nightly retrain)
+    if result.get("ok"):
+        await _ml_save_model(employee_id.upper())
+
     return result
 
 
 @app.post("/api/ml/train-all")
 async def ml_train_all(current: TokenData = Depends(require_hr)):
+    """Retrain all employee models, persist all to Redis."""
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded — check server logs")
+
+    # Batch-fetch all records in two queries instead of N+1
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("SELECT employee_id FROM users WHERE role='labour'")
         employees = [r["employee_id"] for r in c.fetchall()]
-        emp_records: dict = {}
-        for eid in employees:
-            c.execute("""SELECT date, login_time, logout_time, hours_worked, status
-                         FROM attendance WHERE employee_id=%s ORDER BY date ASC""", (eid,))
-            emp_records[eid] = [dict(r) for r in c.fetchall()]
+        emp_records: dict = {eid: [] for eid in employees}
+        if employees:
+            c.execute("""SELECT employee_id, date, login_time, logout_time,
+                                hours_worked, status
+                         FROM attendance WHERE employee_id = ANY(%s)
+                         ORDER BY employee_id, date ASC""", (employees,))
+            for row in c.fetchall():
+                emp_records[row["employee_id"]].append(dict(row))
     finally:
         release_db(conn)
 
-    import asyncio
     result = await asyncio.to_thread(ml_engine.retrain_all, emp_records)
+
+    # Persist all successfully trained models to Redis
+    ok_ids = [eid for eid, r in result.get("details", {}).items() if r.get("ok")]
+    for eid in ok_ids:
+        await _ml_save_model(eid)
+    print(f"[ML] Persisted {len(ok_ids)} models to Redis", flush=True)
+
     return result
 
 
 @app.get("/api/ml/predict/{employee_id}")
 async def ml_predict_overtime(employee_id: str,
                               current: TokenData = Depends(require_manager_or_hr)):
-    """
-    ML-powered overtime projection for one employee.
-    Uses a trained GradientBoostingRegressor if available,
-    otherwise falls back to linear arithmetic.
-    """
+    """ML overtime projection — auto-restores model from Redis if not in memory."""
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded")
+
+    # Restore model from Redis if not already in memory (e.g. after restart)
+    if employee_id.upper() not in ml_engine._models:
+        await _ml_load_model(employee_id.upper())
+
     conn = get_db()
     try:
         c = conn.cursor()
@@ -2088,12 +2250,13 @@ async def ml_predict_overtime(employee_id: str,
 @app.get("/api/ml/anomalies/{employee_id}")
 async def ml_anomalies(employee_id: str, lookback_days: int = 60,
                        current: TokenData = Depends(require_manager_or_hr)):
-    """
-    ML anomaly detection for one employee's recent records.
-    Uses IsolationForest if trained, rule-based fallback otherwise.
-    """
+    """ML anomaly detection — auto-restores model from Redis if not in memory."""
     if not ML_ENGINE_READY:
         raise HTTPException(503, "ml_engine not loaded")
+
+    if employee_id.upper() not in ml_engine._models:
+        await _ml_load_model(employee_id.upper())
+
     conn = get_db()
     try:
         c = conn.cursor()
