@@ -679,6 +679,47 @@ async def _get_rate_limiter() -> RateLimiter:
     r = await get_redis()
     return RateLimiter(r)  # RateLimiter handles r=None as no-op
 
+
+# ─────────────────────────────────────────────
+# REDIS RESPONSE CACHE
+# Cache key patterns:
+#   cache:hr:summary              → 30s TTL
+#   cache:mgr:stats:{manager_id}  → 30s TTL
+#   cache:analytics:emp:{id}      → 60s TTL
+#   cache:analytics:site:{id}     → 60s TTL
+#   cache:employees               → 120s TTL
+# ─────────────────────────────────────────────
+async def _cache_get(key: str):
+    """Return parsed JSON from Redis cache, or None on miss/unavailable."""
+    r = await get_redis()
+    if not r:
+        return None
+    try:
+        raw = await r.get(key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+async def _cache_set(key: str, value, ttl: int):
+    """Store value as JSON in Redis with TTL seconds. Silent on failure."""
+    r = await get_redis()
+    if not r:
+        return
+    try:
+        await r.setex(key, ttl, json.dumps(value, default=str))
+    except Exception:
+        pass
+
+async def _cache_invalidate(*keys: str):
+    """Delete one or more cache keys. Called on writes to keep cache fresh."""
+    r = await get_redis()
+    if not r:
+        return
+    try:
+        await r.delete(*keys)
+    except Exception:
+        pass
+
 # ─────────────────────────────────────────────
 # OVERTIME CHECK — runs after every checkout
 # ─────────────────────────────────────────────
@@ -1113,6 +1154,12 @@ async def checkin(req: CheckinReq, request: Request,
         "site_id": user["sid"],
         "timestamp": now.isoformat(),
     })
+    # Invalidate stats caches so dashboards see fresh counts immediately
+    await _cache_invalidate(
+        "cache:hr:summary",
+        f"cache:mgr:stats:{user['employee_id'].upper()}",
+        f"cache:analytics:site:{user['sid']}",
+    )
 
     return {"success": True, "attendance_id": att_id,
             "message": f"✅ Checked in at {now.strftime('%H:%M:%S')}",
@@ -1182,6 +1229,13 @@ async def checkout(req: CheckoutReq, request: Request,
         "site_id": site_id,
         "timestamp": now.isoformat(),
     })
+    # Invalidate stats caches
+    await _cache_invalidate(
+        "cache:hr:summary",
+        f"cache:mgr:stats:{req.employee_id.upper()}",
+        f"cache:analytics:emp:{req.employee_id.upper()}",
+        f"cache:analytics:site:{site_id}",
+    )
 
     return {"success": True, "message": f"✅ Checked out. You worked {hours} hours.",
             "hours_worked": hours, "logout_time": now.isoformat(), "distance_from_site": int(dist),
@@ -1276,6 +1330,12 @@ async def manager_stats(manager_id: str,
                         current: TokenData = Depends(require_manager)):
     if current.employee_id != manager_id.upper():
         raise HTTPException(403, "You can only view your own site stats")
+
+    cache_key = f"cache:mgr:stats:{manager_id.upper()}"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
+
     today = datetime.now().strftime("%Y-%m-%d")
     conn  = get_db()
     try:
@@ -1290,7 +1350,9 @@ async def manager_stats(manager_id: str,
         lc = c.fetchone()["cnt"]
     finally:
         release_db(conn)
-    return {"today_unique_checkins": tc, "pending_count": pc, "approved_count": ac, "total_labours_site": lc}
+    result = {"today_unique_checkins": tc, "pending_count": pc, "approved_count": ac, "total_labours_site": lc}
+    await _cache_set(cache_key, result, ttl=30)
+    return result
 
 @app.post("/api/manager/verify")
 async def manager_verify(req: ManagerVerifyReq, request: Request,
@@ -1332,6 +1394,7 @@ async def manager_verify(req: ManagerVerifyReq, request: Request,
         "site_id": sid,
         "timestamp": datetime.now().isoformat(),
     })
+    await _cache_invalidate("cache:hr:summary", f"cache:mgr:stats:{req.manager_id.upper()}")
 
     return {"success": True, "message": f"Record {'approved → HR' if req.approved else 'rejected'}"}
 
@@ -1376,6 +1439,11 @@ async def hr_all(hr_id: str, date: str = None, employee_id: str = None,
 
 @app.get("/api/hr/summary")
 async def hr_summary(current: TokenData = Depends(require_hr)):
+    cache_key = "cache:hr:summary"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
+
     today = datetime.now().strftime("%Y-%m-%d")
     conn  = get_db()
     try:
@@ -1392,8 +1460,10 @@ async def hr_summary(current: TokenData = Depends(require_hr)):
         te = c.fetchone()["cnt"]
     finally:
         release_db(conn)
-    return {"today_checkins": tc, "pending_manager": pm, "pending_hr": ph,
-            "approved_today": at, "total_employees": te}
+    result = {"today_checkins": tc, "pending_manager": pm, "pending_hr": ph,
+              "approved_today": at, "total_employees": te}
+    await _cache_set(cache_key, result, ttl=30)
+    return result
 
 @app.post("/api/hr/verify")
 async def hr_verify(req: HRVerifyReq, request: Request,
@@ -1436,6 +1506,7 @@ async def hr_verify(req: HRVerifyReq, request: Request,
         "site_id": site_id,
         "timestamp": datetime.now().isoformat(),
     })
+    await _cache_invalidate("cache:hr:summary")
 
     return {"success": True, "message": f"Record {new_status}."}
 
@@ -1448,6 +1519,11 @@ async def hr_verify(req: HRVerifyReq, request: Request,
 @app.get("/api/analytics/employee/{employee_id}")
 async def employee_analytics(employee_id: str, lookback_days: int = 90,
                              current: TokenData = Depends(get_current_user)):
+    cache_key = f"cache:analytics:emp:{employee_id.upper()}"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
+
     conn = get_db()
     try:
         c = conn.cursor()
@@ -1502,24 +1578,99 @@ async def employee_analytics(employee_id: str, lookback_days: int = 90,
         "estimated_days_until_limit_at_current_pace": days_to_limit,
         "method": "linear projection from trailing average — statistical estimate, not a trained model"
     }
+    await _cache_set(cache_key, result, ttl=60)
+    return result
 
 @app.get("/api/analytics/site/{site_id}")
 async def site_analytics(site_id: int,
                          current: TokenData = Depends(require_manager_or_hr)):
+    cache_key = f"cache:analytics:site:{site_id}"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
+
     conn = get_db()
     try:
         c = conn.cursor()
+        # Fetch all labourers for the site
         c.execute("SELECT employee_id, name, phone FROM users WHERE site_id=%s AND role='labour'", (site_id,))
         labourers = c.fetchall()
-        results = []
-        for lab in labourers:
-            r = await employee_analytics(lab["employee_id"], current=current)
-            results.append(r)
+        if not labourers:
+            result = {"site_id": site_id, "employees_analyzed": 0,
+                      "at_risk_of_overtime": 0, "details": []}
+            await _cache_set(cache_key, result, ttl=60)
+            return result
+
+        emp_ids = [lab["employee_id"] for lab in labourers]
+        as_of = datetime.now()
+        period_start, period_end = _month_bounds(as_of)
+
+        # ── Single batch query for month-to-date hours ─────────────────────
+        c.execute("""
+            SELECT employee_id, COALESCE(SUM(hours_worked),0) as month_hours
+            FROM attendance
+            WHERE employee_id = ANY(%s) AND date >= %s AND date < %s
+              AND hours_worked IS NOT NULL
+            GROUP BY employee_id
+        """, (emp_ids, period_start, period_end))
+        month_map = {r["employee_id"]: float(r["month_hours"]) for r in c.fetchall()}
+
+        # ── Single batch query for trailing 90-day records ─────────────────
+        c.execute("""
+            SELECT employee_id, date, hours_worked
+            FROM attendance
+            WHERE employee_id = ANY(%s) AND hours_worked IS NOT NULL
+              AND date >= CURRENT_DATE - INTERVAL '90 days'
+            ORDER BY employee_id, date ASC
+        """, (emp_ids,))
+        records_map: dict = {}
+        for row in c.fetchall():
+            records_map.setdefault(row["employee_id"], []).append(row)
     finally:
         release_db(conn)
+
+    days_so_far   = (as_of.date() - period_start).days + 1
+    days_in_month = (period_end - period_start).days
+    days_left     = max(0, days_in_month - days_so_far)
+
+    results = []
+    for lab in labourers:
+        eid = lab["employee_id"]
+        rows = records_map.get(eid, [])
+        month_hours = month_map.get(eid, 0.0)
+
+        if not rows:
+            results.append({"employee_id": eid, "name": lab["name"],
+                            "data_points": 0,
+                            "message": "Not enough historical attendance data yet."})
+            continue
+
+        total_hours = sum(float(r["hours_worked"]) for r in rows)
+        avg_per_day = total_hours / len(rows)
+        projected   = round(month_hours + avg_per_day * days_left, 1)
+        will_exceed = projected >= OVERTIME_LIMIT_HOURS
+        days_to_limit = None
+        if avg_per_day > 0 and month_hours < OVERTIME_LIMIT_HOURS:
+            days_to_limit = math.ceil((OVERTIME_LIMIT_HOURS - month_hours) / avg_per_day)
+
+        results.append({
+            "employee_id": eid,
+            "name": lab["name"],
+            "data_points": len(rows),
+            "avg_hours_per_worked_day": round(avg_per_day, 2),
+            "month_to_date_hours": round(month_hours, 1),
+            "overtime_limit_hours": OVERTIME_LIMIT_HOURS,
+            "projected_month_end_hours": projected,
+            "projected_to_exceed_limit": will_exceed,
+            "estimated_days_until_limit_at_current_pace": days_to_limit,
+            "method": "batch linear projection",
+        })
+
     at_risk = [r for r in results if r.get("projected_to_exceed_limit")]
-    return {"site_id": site_id, "employees_analyzed": len(results),
-            "at_risk_of_overtime": len(at_risk), "details": results}
+    result = {"site_id": site_id, "employees_analyzed": len(results),
+              "at_risk_of_overtime": len(at_risk), "details": results}
+    await _cache_set(cache_key, result, ttl=60)
+    return result
 
 @app.get("/api/ai/site-summary/{site_id}")
 async def ai_site_summary(site_id: int,
@@ -1617,15 +1768,21 @@ async def ai_checkin_flag(attendance_id: int,
 
 @app.get("/api/employees")
 async def get_employees(current: TokenData = Depends(require_manager_or_hr)):
+    cache_key = "cache:employees"
+    cached = await _cache_get(cache_key)
+    if cached:
+        return cached
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("""SELECT u.employee_id,u.name,u.role,u.phone,u.department,
                             u.face_registered, s.name as site_name
                      FROM users u LEFT JOIN sites s ON u.site_id=s.id ORDER BY u.role,u.name""")
-        return {"employees": [dict(r) for r in c.fetchall()]}
+        result = {"employees": [dict(r) for r in c.fetchall()]}
     finally:
         release_db(conn)
+    await _cache_set(cache_key, result, ttl=120)
+    return result
 
 @app.get("/api/sites")
 async def get_sites(current: TokenData = Depends(get_current_user)):
@@ -2012,7 +2169,24 @@ async def _run_scheduled_report(schedule_id: int):
     """
     Core report runner — fetches the schedule, builds the AI report,
     delivers it, and writes a run-log entry.
+
+    Uses a Redis distributed lock (TTL = 1 hour) so only ONE worker
+    executes this job even when scaled to multiple containers.
+    Without Redis, falls through and runs normally (single-instance safe).
     """
+    # ── Scheduler dedup lock ─────────────────────────────────────────────────
+    from datetime import date as _date
+    lock_key = f"sched:{schedule_id}:{_date.today().isoformat()}"
+    r = await get_redis()
+    if r:
+        try:
+            acquired = await r.set(lock_key, "1", nx=True, ex=3600)
+            if not acquired:
+                print(f"[SCHEDULER] Job {schedule_id} already running on another worker — skipping", flush=True)
+                return
+        except Exception as _le:
+            print(f"[SCHEDULER] Redis lock failed ({_le}), proceeding without lock", flush=True)
+
     conn = get_db()
     try:
         c = conn.cursor()
