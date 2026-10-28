@@ -15,12 +15,20 @@ from app.core.config import DATABASE_URL
 _DSN_EXTRA = "keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"
 _dsn = DATABASE_URL + ("&" if "?" in DATABASE_URL else "?") + _DSN_EXTRA
 
-db_pool = pg_pool.ThreadedConnectionPool(
-    minconn=2, maxconn=20,
-    dsn=_dsn,
-    cursor_factory=RealDictCursor,
-)
-print("✅ PostgreSQL pool ready")
+# Pool is created lazily on first call to get_db() so tests can import
+# this module without needing a running Postgres server.
+_db_pool = None
+
+def _get_pool():
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = pg_pool.ThreadedConnectionPool(
+            minconn=2, maxconn=20,
+            dsn=_dsn,
+            cursor_factory=RealDictCursor,
+        )
+        print("✅ PostgreSQL pool ready")
+    return _db_pool
 
 
 def get_db():
@@ -28,7 +36,8 @@ def get_db():
     Borrow a connection from the pool with a liveness check.
     Replaces stale (Railway-dropped) connections automatically.
     """
-    conn = db_pool.getconn()
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         if conn.closed:
             raise psycopg2.OperationalError("connection closed")
@@ -36,7 +45,7 @@ def get_db():
         conn.rollback()
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         try:
-            db_pool.putconn(conn, close=True)
+            pool.putconn(conn, close=True)
         except Exception:
             pass
         conn = psycopg2.connect(dsn=_dsn, cursor_factory=RealDictCursor)
@@ -46,8 +55,9 @@ def get_db():
 
 
 def release_db(conn):
+    pool = _get_pool()
     try:
-        db_pool.putconn(conn)
+        pool.putconn(conn)
     except Exception:
         try:
             conn.close()
